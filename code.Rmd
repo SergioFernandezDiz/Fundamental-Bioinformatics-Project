@@ -1,0 +1,56 @@
+---
+title: "Bioinformatics Project"
+author: "Sergio Fernandez - Alessandro Mecchia - Paolo Nicolet"
+date: "`r Sys.Date()`"
+output:
+  html_notebook:
+    toc: true
+    toc_depth: 2
+---
+
+# Imports and packages
+
+```{r}
+Sys.which("pandoc")
+
+BiocManager::install("recount3")
+
+```
+
+# Project Introduction
+
+**da completare**
+
+# Dataset Selection
+
+Load recount3 library and the list of its projects to explore the projects.
+
+recount3 is a large-scale resource of uniformly processed RNA-seq data for humans and mice. It aggregates publicly available datasets and provides them in a standardized format for downstream analysis. **Recount3 contain:**
+
+-   **Sequence Read Archive (SRA)**
+    -   Largest source of raw RNA-seq data.
+    -   Includes diverse studies across tissues, conditions, and species.
+    -   Data are annotation-agnostic and processed uniformly using the Monorail pipeline.
+-   **Genotype-Tissue Expression (GTEx) Project**
+    -   High-quality RNA-seq data from multiple human tissues.
+    -   Focused on understanding tissue-specific gene expression.
+-   **The Cancer Genome Atlas (TCGA)**
+    -   RNA-seq data from various cancer types.
+    -   Enables cancer-specific expression and splicing analyses.
+
+```{r}
+library(recount3)
+
+# List of available projects
+projects <- available_projects()
+head(projects)
+
+```
+
+```{r}
+# Filter by GTEx (normal tissues)
+gtex_projects <- subset(projects, file_source == "gtex")
+
+# Explore metadata
+head(gtex_projects)
+```
