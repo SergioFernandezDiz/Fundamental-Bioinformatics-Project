@@ -16,6 +16,15 @@ install.packages("tidyverse")
 
 ```
 
+```{r}
+library(recount3)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(plotly)
+
+```
+
 # Project Introduction
 
 **da completare**
@@ -23,8 +32,6 @@ install.packages("tidyverse")
 # Dataset Selection
 
 ```{r}
-library(recount3)
-
 # List of available projects
 projects <- available_projects()
 projects
@@ -88,11 +95,20 @@ print(demo_cols)
 rse_gene_tcga
 ```
 
+# Data Exploration
+
 ```{r}
 md_gtex <- as.data.frame(colData(rse_gene_BRAIN))
 md_tcga <- as.data.frame(colData(rse_gene_tcga))
+```
+
+```{r}
+df_age %>%
+  count(dataset)
 
 ```
+
+## Age distribution
 
 ```{r}
 age_gtex <- md_gtex$gtex.age
@@ -103,35 +119,146 @@ head(age_tcga)
 ```
 
 ```{r}
-age_tcga_years <- age_tcga / 365.25
-
-gtex_bins <- c(20,30,40,50,60,70,80, Inf)
+gtex_bins   <- c(20,30,40,50,60,70,80, Inf)
 gtex_labels <- c("20-29","30-39","40-49","50-59","60-69","70-79","80+")
 
-age_tcga_bins <- cut(
-  age_tcga_years,
-  breaks = gtex_bins,
-  labels = gtex_labels,
-  right = FALSE
-)
+df_age_perc <- bind_rows(
+  data.frame(
+    age_bin = factor(md_gtex$gtex.age, levels = gtex_labels),
+    dataset = "GTEx"
+  ),
+  data.frame(
+    age = as.numeric(md_tcga$tcga.gdc_cases.diagnoses.age_at_diagnosis) / 365.25,
+    dataset = "TCGA"
+  ) %>%
+    mutate(age_bin = cut(age, breaks = gtex_bins, labels = gtex_labels, right = FALSE))
+) %>%
+  filter(!is.na(age_bin)) %>%
+  count(dataset, age_bin) %>%
+  group_by(dataset) %>%
+  mutate(percent = n / sum(n) * 100) %>%
+  ungroup()
 
 
 ```
 
 ```{r}
-library(plotly)
 
-p <- ggplot(df_age, aes(x = age_bin, fill = dataset)) +
-  geom_bar(position = "dodge") +
+p <- ggplot(
+  df_age_perc,
+  aes(x = age_bin, y = percent, fill = dataset)
+) +
+  geom_col(position = "dodge") +
   labs(
     x = "Age range (years)",
-    y = "Number of samples",
-    title = "Age distribution: GTEx vs TCGA"
+    y = "Percentage of samples",
+    title = "Normalized age distribution: GTEx vs TCGA"
   ) +
-  theme_minimal() +
+theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 ggplotly(p)
 
+```
+
+## Sex Distribution
+
+```{r}
+sex_gtex <- md_gtex$gtex.sex %>%
+  recode(
+    `1` = "Male",
+    `2` = "Female"
+  )
+
+sex_tcga <- md_tcga$tcga.gdc_cases.demographic.gender
+```
+
+```{r}
+df_sex <- bind_rows(
+  data.frame(
+    sex = sex_gtex,
+    dataset = "GTEx"
+  ),
+  data.frame(
+    sex = sex_tcga,
+    dataset = "TCGA"
+  )
+) %>%
+  filter(!is.na(sex)) %>%
+  mutate(sex = str_to_title(sex)) %>% 
+  count(dataset, sex) %>%
+  group_by(dataset) %>%
+  mutate(percent = n / sum(n) * 100) %>%
+  ungroup()
+
+```
+
+```{r}
+p_sex <- ggplot(
+  df_sex,
+  aes(x = sex, y = percent, fill = dataset)
+) +
+  geom_col(position = "dodge") +
+  labs(
+    x = "Sex",
+    y = "Percentage of samples",
+    title = "Sex distribution: GTEx vs TCGA"
+  ) +
+  theme_minimal()
+
+ggplotly(p_sex)
+
+```
+
+## RNA Quality
+
+```{r}
+
+df_qc_long <- bind_rows(
+  md_gtex %>%
+    transmute(
+      dataset = "GTEx",
+      avgq = recount_seq_qc.avgq,
+      errq = recount_seq_qc.errq
+    ),
+  md_tcga %>%
+    transmute(
+      dataset = "TCGA",
+      avgq = recount_seq_qc.avgq,
+      errq = recount_seq_qc.errq
+    )
+) %>%
+  pivot_longer(
+    cols = c(avgq, errq),
+    names_to = "metric",
+    values_to = "value"
+  ) %>%
+  filter(!is.na(value))
+
+```
+
+```{r}
+p_qc_facet <- ggplot(
+  df_qc_long,
+  aes(x = dataset, y = value, fill = dataset)
+) +
+  geom_boxplot(outlier.alpha = 0.3) +
+  facet_wrap(~ metric, scales = "free_y",
+             labeller = as_labeller(c(
+               avgq = "Average base quality (avgq)",
+               errq = "Base error rate (errq)"
+             ))) +
+  labs(
+    x = "",
+    y = "",
+    title = "RNA-seq quality metrics comparison: GTEx vs TCGA"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold")
+  )
+
+ggplotly(p_qc_facet)
 
 ```
