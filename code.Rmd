@@ -11,9 +11,8 @@ output:
 # Imports and packages
 
 ```{r}
-Sys.which("pandoc")
-
 BiocManager::install("recount3")
+install.packages("tidyverse")
 
 ```
 
@@ -23,27 +22,12 @@ BiocManager::install("recount3")
 
 # Dataset Selection
 
-Load recount3 library and the list of its projects to explore the projects.
-
-recount3 is a large-scale resource of uniformly processed RNA-seq data for humans and mice. It aggregates publicly available datasets and provides them in a standardized format for downstream analysis. **Recount3 contain:**
-
--   **Sequence Read Archive (SRA)**
-    -   Largest source of raw RNA-seq data.
-    -   Includes diverse studies across tissues, conditions, and species.
-    -   Data are annotation-agnostic and processed uniformly using the Monorail pipeline.
--   **Genotype-Tissue Expression (GTEx) Project**
-    -   High-quality RNA-seq data from multiple human tissues.
-    -   Focused on understanding tissue-specific gene expression.
--   **The Cancer Genome Atlas (TCGA)**
-    -   RNA-seq data from various cancer types.
-    -   Enables cancer-specific expression and splicing analyses.
-
 ```{r}
 library(recount3)
 
 # List of available projects
 projects <- available_projects()
-head(projects)
+projects
 
 ```
 
@@ -52,5 +36,101 @@ head(projects)
 gtex_projects <- subset(projects, file_source == "gtex")
 
 # Explore metadata
-head(gtex_projects)
+gtex_projects
+```
+
+```{r}
+
+proj_info_pancreas <- subset(
+    gtex_projects,
+    project == "BRAIN" & project_type == "data_sources"
+)
+
+# Connet to GTEx project
+rse_gene_BRAIN <- create_rse(proj_info_pancreas)
+rse_gene_BRAIN
+```
+
+```{r}
+colnames(colData(rse_gene_BRAIN))
+```
+
+```{r}
+
+# Filter by TCGA (the cancer genome atlas)
+tcga_projects <- subset(projects, file_source== "tcga")
+
+# Explore metadata
+tcga_projects
+```
+
+```{r}
+
+proj_info_gbm <- subset(
+  tcga_projects,
+  project == "GBM" & project_type == "data_sources"
+)
+
+rse_gene_tcga <- create_rse(proj_info_gbm, type = "gene")
+
+metadata_tcga <- colData(rse_gene_tcga)
+all_cols <- colnames(metadata_tcga)
+
+diagnosis_cols <- grep("^tcga\\.gdc_cases\\.diagnoses", all_cols, value = TRUE)
+print(diagnosis_cols)
+
+demo_cols <- grep("^tcga\\.gdc_cases\\.demographic", all_cols, value = TRUE)
+print(demo_cols)
+
+```
+
+```{r}
+rse_gene_tcga
+```
+
+```{r}
+md_gtex <- as.data.frame(colData(rse_gene_BRAIN))
+md_tcga <- as.data.frame(colData(rse_gene_tcga))
+
+```
+
+```{r}
+age_gtex <- md_gtex$gtex.age
+head(age_gtex)
+
+age_tcga <- md_tcga$tcga.gdc_cases.diagnoses.age_at_diagnosis
+head(age_tcga)
+```
+
+```{r}
+age_tcga_years <- age_tcga / 365.25
+
+gtex_bins <- c(20,30,40,50,60,70,80, Inf)
+gtex_labels <- c("20-29","30-39","40-49","50-59","60-69","70-79","80+")
+
+age_tcga_bins <- cut(
+  age_tcga_years,
+  breaks = gtex_bins,
+  labels = gtex_labels,
+  right = FALSE
+)
+
+
+```
+
+```{r}
+library(plotly)
+
+p <- ggplot(df_age, aes(x = age_bin, fill = dataset)) +
+  geom_bar(position = "dodge") +
+  labs(
+    x = "Age range (years)",
+    y = "Number of samples",
+    title = "Age distribution: GTEx vs TCGA"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplotly(p)
+
 ```
