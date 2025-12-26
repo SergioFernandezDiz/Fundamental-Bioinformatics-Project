@@ -13,7 +13,7 @@ output:
 ```{r}
 BiocManager::install("recount3")
 install.packages("tidyverse")
-
+install.packages("pheatmap")
 ```
 
 ```{r}
@@ -24,6 +24,7 @@ library(ggplot2)
 library(plotly)
 library(stringr)
 library(edgeR)
+library(pheatmap)
 ```
 
 # 1. Project Introduction
@@ -96,12 +97,50 @@ print(demo_cols)
 rse_gene_tcga
 ```
 
-# 3. Data Exploration
+## 2.1. Dataset Reduction 
+
+**spiegare il problema che siccome di dati normali abbiamo quasi 3000 e solo 200 circa di dati con tumore dobbiamo fare una selezione per cercare di eliminare questo bias** 
 
 ```{r}
 md_gtex <- as.data.frame(colData(rse_gene_BRAIN))
 md_tcga <- as.data.frame(colData(rse_gene_tcga))
 ```
+
+
+```{r}
+gtex_counts <- as.data.frame(table(md_gtex$gtex.smtsd))
+colnames(gtex_counts) <- c("Region", "Count")
+
+ggplot(gtex_counts, aes(x = reorder(Region, -Count), y = Count)) +
+  geom_bar(stat = "identity", fill = "steelblue") + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "GTEx Sample Distribution by Brain Region",
+       x = "Region", 
+       y = "Number of Samples")
+```
+
+```{r}
+tcga_site_counts <- as.data.frame(table(md_tcga$tcga.gdc_cases.project.primary_site))
+colnames(tcga_site_counts) <- c("Region", "Count")
+
+ggplot(tcga_site_counts, aes(x = reorder(Region, -Count), y = Count)) +
+  geom_bar(stat = "identity", fill = "firebrick") + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "TCGA Sample Distribution by Anatomical Region",
+       x = "Primary Site", 
+       y = "Number of Samples")
+
+```
+The initial dataset was highly unbalanced, with over 3,000 healthy samples (GTEx) compared to approximately 180 tumor samples (TCGA). To ensure a statistically sound comparison and prevent memory issues during processing, we have filtered the GTEx group to include only samples from the Brain - Cortex. This region is the most biologically relevant for comparison with Glioblastoma (GBM). This reduction to roughly 286 healthy samples creates a more balanced experimental design, which optimizes the statistical power of the differential expression analysis and allows for clearer visualization of sample clusters.
+
+```{r}
+rse_gene_BRAIN <- rse_gene_BRAIN[, rse_gene_BRAIN$gtex.smtsd == "Brain - Cortex"]
+```
+
+
+# 3. Data Exploration
 
 ## 3.1. Age distribution
 
@@ -274,7 +313,7 @@ count_matrix <- cbind(counts_gtex2, counts_tcga2)
 
 ```{r}
 count_matrix <- as.data.frame(count_matrix)
-count_matrix
+head(count_matrix)
 ```
 
 ## 4.1. Quality Control
@@ -300,7 +339,7 @@ Where:
 CPMs <- cpm(count_matrix)
 # Have a look at the output
 CPMs <- as.data.frame(CPMs)
-CPMs
+head(CPMs)
 
 ```
 
@@ -317,7 +356,7 @@ We' ll use the cpm function from the edgeR library (M D Robinson, McCarthy, and 
 thresh <- CPMs > 0.3
 # This produces a logical matrix with TRUEs and FALSEs
 thresh <- as.data.frame(thresh)
-thresh
+head(thresh)
 ```
 
 ```{r cpm-keep}
@@ -345,7 +384,7 @@ abline(v=0.3)
 
 ```{r}
 counts_filtered <- as.data.frame(counts.keep)
-counts_filtered
+head(counts_filtered)
 ```
 
 **Normalization for Composition Bias (TMM)**
@@ -366,10 +405,93 @@ dgeObj <- DGEList(counts = counts_filtered)
 ```{r}
 # Calculate TMM normalization factors
 dgeObj <- calcNormFactors(dgeObj, method = "TMM")
-
-# Check normalization factors (should be around 1)
-dgeObj$samples
 ```
+
+
+```{r}
+# Check normalization factors (should be around 1)
+head(dgeObj$samples)
+```
+
+
+### 4.1.2. Unsupervised Clustering
+
+```{r}
+
+# Calculate log2-CPM 
+logcounts_all <- cpm(dgeObj, log = TRUE)
+pca_input <- t(logcounts_all)
+
+# Perform PCA 
+pca_res <- prcomp(pca_input, scale. = TRUE)
+pca_df <- as.data.frame(pca_res$x)
+
+pca_df$Group <- c(rep("GTEx", ncol(counts_gtex2)), rep("TCGA", ncol(counts_tcga2)))
+
+# Generate the PCA plot
+ggplot(pca_df, aes(x = PC1, y = PC2, color = Group)) +
+  geom_point(size = 3, alpha = 0.7) +
+  theme_minimal() +
+  scale_color_manual(values = c("GTEx" = "blue", "TCGA" = "red")) +
+  labs(title = "Unsupervised Clustering: PCA",
+       subtitle = "Analysis based on the full set of filtered genes",
+       x = paste0("PC1 (", round(100*summary(pca_res)$importance[2,1], 1), "%)"),
+       y = paste0("PC2 (", round(100*summary(pca_res)$importance[2,2], 1), "%)"))
+
+```
+```{r}
+
+pca_df$AvgQ <- c(md_gtex[colnames(counts_gtex2), ]$recount_seq_qc.avgq, 
+                 md_tcga[colnames(counts_tcga2), ]$recount_seq_qc.avgq)
+pca_df$AgeNumeric <- as.numeric(gsub("[^0-9]", "", pca_df$Age)) 
+
+p <- plot_ly(pca_df, x = ~PC1, y = ~PC2, 
+             symbol = ~Group,
+             symbols = c('circle', 'x'),
+             text = ~paste("Sample:", SampleID, "<br>Sex:", Sex, "<br>Age:", Age, "<br>AvgQ:", AvgQ),
+             type = "scatter", mode = "markers",
+             marker = list(size = 10, opacity = 0.8)) %>%
+  layout(
+    title = "PCA: Interactive Color Switching",
+    xaxis = list(title = "PC1"),
+    yaxis = list(title = "PC2"),
+    updatemenus = list(
+      list(
+        x = 0.05,
+        y = 1,
+        xanchor = "left",
+        yanchor = "top",
+        buttons = list(
+          list(method = "restyle",
+               args = list("marker.color", list(ifelse(pca_df$Group == "GTEx", "blue", "red"))),
+               label = "Color by Dataset"),
+          
+          list(method = "restyle",
+               args = list("marker.color", list(ifelse(pca_df$Sex == "Male", "#1f77b4", "#e377c2"))),
+               label = "Color by Sex"),
+          
+          list(method = "restyle",
+               args = list("marker.color", list(pca_df$AgeNumeric),
+                           "marker.colorscale", "Viridis",
+                           "marker.showscale", TRUE),
+               label = "Color by Age"),
+
+          list(method = "restyle",
+               args = list("marker.color", list(pca_df$AvgQ),
+                           "marker.colorscale", "Plasma",
+                           "marker.showscale", TRUE),
+               label = "Color by RNA Quality")
+        )
+      )
+    )
+  )
+
+p
+
+```
+
+
+## 4.2. DE Analysis
 
 **Count the reads for any sample**
 
