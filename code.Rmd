@@ -400,6 +400,7 @@ barplot(low_20_total / 1e6,
 legend("topleft", legend = c("GTEx (Lowest 10)", "TCGA (Lowest 10)"), 
        fill = c("blue", "red"), bty = "n")
 
+
 ```
 
 ***Plot the distribution of expression for sample***
