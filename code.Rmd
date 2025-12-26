@@ -22,14 +22,15 @@ library(tidyr)
 library(dplyr)
 library(ggplot2)
 library(plotly)
-
+library(stringr)
+library(edgeR)
 ```
 
-# Project Introduction
+# 1. Project Introduction
 
 **da completare**
 
-# Dataset Selection
+# 2. Dataset Selection
 
 ```{r}
 # List of available projects
@@ -95,20 +96,14 @@ print(demo_cols)
 rse_gene_tcga
 ```
 
-# Data Exploration
+# 3. Data Exploration
 
 ```{r}
 md_gtex <- as.data.frame(colData(rse_gene_BRAIN))
 md_tcga <- as.data.frame(colData(rse_gene_tcga))
 ```
 
-```{r}
-df_age %>%
-  count(dataset)
-
-```
-
-## Age distribution
+## 3.1. Age distribution
 
 ```{r}
 age_gtex <- md_gtex$gtex.age
@@ -161,7 +156,7 @@ ggplotly(p)
 
 ```
 
-## Sex Distribution
+## 3.2. Sex Distribution
 
 ```{r}
 sex_gtex <- md_gtex$gtex.sex %>%
@@ -210,7 +205,7 @@ ggplotly(p_sex)
 
 ```
 
-## RNA Quality
+## 3.3. RNA Quality
 
 ```{r}
 
@@ -261,4 +256,178 @@ p_qc_facet <- ggplot(
 
 ggplotly(p_qc_facet)
 
+```
+
+# 4. Different Gene Expression Analysis (Bulk RNA-seq)
+
+```{r}
+counts_gtex <- transform_counts(rse_gene_BRAIN)
+counts_tcga <- transform_counts(rse_gene_tcga)
+
+common_genes <- intersect(rownames(counts_gtex), rownames(counts_tcga))
+
+counts_gtex2 <- counts_gtex[common_genes, ]
+counts_tcga2 <- counts_tcga[common_genes, ]
+
+count_matrix <- cbind(counts_gtex2, counts_tcga2)
+```
+
+```{r}
+count_matrix <- as.data.frame(count_matrix)
+count_matrix
+```
+
+## 4.1. Quality Control
+
+### 4.1.1. Normalization
+
+**Counts Per Million (CPM)**
+
+For a given gene *i* in sample *j*, the CPM is calculated as:
+
+$$
+\text{CPM}_{ij} = \left( \frac{\text{Raw count}_{ij}}{\sum_{k=1}^{N} \text{Raw count}_{kj}} \right) \times 10^6
+$$
+
+Where:
+
+-   $\text{Raw count}_{ij}$: number of reads for gene *i* in sample *j*\
+-   ${\sum_{k=1}^{N} \text{Raw count}_{kj}}$: total number of reads for all genes in sample *j*\
+-   The multiplication by \$ 10\^6 \$ scales the expression to "per million" units
+
+```{r cpm-filter}
+# Obtain CPMs
+CPMs <- cpm(count_matrix)
+# Have a look at the output
+CPMs <- as.data.frame(CPMs)
+CPMs
+
+```
+
+**Filtering lowly expressed genes**
+
+Genes with very low counts across all libraries provide little evidence for differential expression and they interfere with some of the statistical approximations that are used later in the pipeline. They also add to the multiple testing burden when estimating false discovery rates, reducing power to detect differentially expressed genes. These genes should be filtered out prior to further analysis.
+
+There are a few ways to filter out lowly expressed genes. When there are biological replicates in each group, in this case we have a sample size of 2 in each group, we favour filtering on a minimum counts per million threshold present in at least 2 samples. Two represents the smallest sample size for each group in our experiment. In this dataset, we choose to retain genes if they are expressed at a counts-per-million (CPM) above 0.5 in at least two samples.
+
+We' ll use the cpm function from the edgeR library (M D Robinson, McCarthy, and Smyth 2010) to generate the CPM values and then filter. Note that by converting to CPMs we are normalising for the different sequencing depths for each sample.
+
+```{r cpm-thresh}
+# Which values in myCPM are greater than 0.5?
+thresh <- CPMs > 0.3
+# This produces a logical matrix with TRUEs and FALSEs
+thresh <- as.data.frame(thresh)
+thresh
+```
+
+```{r cpm-keep}
+# Summary of how many TRUEs there are in each row
+table(rowSums(thresh))
+
+
+# This filter removes genes that are only detected in one sample or not detected at all, ensuring that only genes with evidence of expression in multiple samples are kept for further analysis
+keep <- rowSums(thresh) >= 2
+# Subset the rows of countdata to keep the more highly expressed genes
+counts.keep <- count_matrix[keep,]
+dim(counts.keep)
+```
+
+As a general rule, a good threshold can be chosen by identifying the CPM that corresponds to a count of 10, which in this case is about 0.3. You should filter with CPMs rather than filtering on the counts directly, as the latter does not account for differences in library sizes between samples.
+
+Another way in doing so is using the built in function `filterByExpr()` of the edgeR package, however to do so we would need more information such as the design of the study and the division in groups because the function is testing if a gene wil be statistically significant in function of the experiment setup.
+
+```{r cpm-plot}
+# Let's have a look and see whether our threshold of 0.5 does indeed correspond to a count of about 10-15 by Plotting the expression profile of the first sample (First column)
+plot(CPMs[,1],count_matrix[,1],ylim=c(0,20),xlim=c(0,2))
+abline(v=0.3)
+
+```
+
+```{r}
+counts_filtered <- as.data.frame(counts.keep)
+counts_filtered
+```
+
+**Normalization for Composition Bias (TMM)**
+
+While CPM normalization accounts for differences in sequencing depth (library size), it does not address **composition bias**. Composition bias occurs when a small number of highly expressed genes dominate the total pool of RNA in a library, artificially deflating the relative counts of all other genes.
+
+We apply **TMM** normalization instead of **TPM** because:
+
+-   **TPM** is for comparing different genes **within** one sample (it corrects for gene length).
+
+-   **TMM** is for comparing the same gene **between** different samples (Healthy vs. Tumor). It corrects for **composition bias**, ensuring that a few highly expressed genes do not skew the results for the entire library.
+
+```{r}
+# Create DGEList object
+dgeObj <- DGEList(counts = counts_filtered)
+```
+
+```{r}
+# Calculate TMM normalization factors
+dgeObj <- calcNormFactors(dgeObj, method = "TMM")
+
+# Check normalization factors (should be around 1)
+dgeObj$samples
+```
+
+**Count the reads for any sample**
+
+Here we visualize the library size for every sample
+
+```{r}
+idx_gtex <- 1:ncol(counts_gtex2)
+idx_tcga <- (ncol(counts_gtex2) + 1):(ncol(counts_gtex2) + ncol(counts_tcga2))
+
+lib_sizes_gtex <- dgeObj$samples$lib.size[idx_gtex]
+names(lib_sizes_gtex) <- colnames(dgeObj)[idx_gtex]
+low_10_gtex <- sort(lib_sizes_gtex)[1:10]
+
+lib_sizes_tcga <- dgeObj$samples$lib.size[idx_tcga]
+names(lib_sizes_tcga) <- colnames(dgeObj)[idx_tcga]
+low_10_tcga <- sort(lib_sizes_tcga)[1:10]
+
+low_20_total <- c(low_10_gtex, low_10_tcga)
+
+par(mar = c(10, 4, 4, 2)) 
+barplot(low_20_total / 1e6, 
+        las = 2,
+        ylab = "Library size (millions)", 
+        main = "Bottom 10 Samples by Library Size (GTEx vs TCGA)",
+        col = c(rep("blue", 10), rep("red", 10)),
+        cex.names = 0.7) # Rimpicciolisce i nomi delle colonne per farli stare
+
+legend("topleft", legend = c("GTEx (Lowest 10)", "TCGA (Lowest 10)"), 
+       fill = c("blue", "red"), bty = "n")
+
+```
+
+***Plot the distribution of expression for sample***
+
+```{r}
+sample_means <- colMeans(CPMs)
+
+idx_gtex <- 1:ncol(counts_gtex2)
+idx_tcga <- (ncol(counts_gtex2) + 1):(ncol(counts_gtex2) + ncol(counts_tcga2))
+
+low_10_gtex_names <- names(sort(sample_means[idx_gtex])[1:10])
+low_10_tcga_names <- names(sort(sample_means[idx_tcga])[1:10])
+
+logcounts <- cpm(count_matrix, log=TRUE)
+sub_logcounts <- logcounts[, c(low_10_gtex_names, low_10_tcga_names)]
+```
+
+```{r}
+par(mar = c(10, 4, 4, 2))
+boxplot(sub_logcounts, 
+        las = 2, 
+        main = "Boxplot of Log2-CPMs (Bottom 10 Samples per Group)",
+        ylab = "Log2 Counts per Million",
+        col = c(rep("blue", 10), rep("red", 10)),
+        names = c(paste0("GTEx_", 1:10), paste0("TCGA_", 1:10))) 
+
+abline(h = median(logcounts), col = "darkgreen", lwd = 2, lty = 2)
+legend("topright", legend = c("GTEx (Lowest Mean)", "TCGA (Lowest Mean)", "Global Median"), 
+       fill = c("blue", "red", NA), border = c("black", "black", NA),
+       lty = c(NA, NA, 2), col = c(NA, NA, "darkgreen"), bty = "n")
 ```
