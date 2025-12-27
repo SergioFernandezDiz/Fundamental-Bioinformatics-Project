@@ -25,6 +25,8 @@ library(plotly)
 library(stringr)
 library(edgeR)
 library(pheatmap)
+library(gplots)
+library(RColorBrewer)
 ```
 
 # 1. Project Introduction
@@ -417,18 +419,38 @@ head(dgeObj$samples)
 ### 4.1.2. Unsupervised Clustering
 
 ```{r}
-
-# Calculate log2-CPM 
+# 1. Calcoli principali (da eseguire una sola volta)
 logcounts_all <- cpm(dgeObj, log = TRUE)
-pca_input <- t(logcounts_all)
-
-# Perform PCA 
-pca_res <- prcomp(pca_input, scale. = TRUE)
+pca_res <- prcomp(t(logcounts_all), scale. = TRUE)
 pca_df <- as.data.frame(pca_res$x)
 
-pca_df$Group <- c(rep("GTEx", ncol(counts_gtex2)), rep("TCGA", ncol(counts_tcga2)))
+# 2. Aggiunta metadati (collegando i campioni filtrati ai metadati md_gtex/md_tcga)
+samples_gtex <- colnames(counts_gtex2)
+samples_tcga <- colnames(counts_tcga2)
 
-# Generate the PCA plot
+pca_df$Group <- c(rep("GTEx", length(samples_gtex)), rep("TCGA", length(samples_tcga)))
+pca_df$SampleID <- rownames(pca_df)
+
+pca_df$Sex <- c(
+  md_gtex[samples_gtex, ]$gtex.sex %>% recode(`1` = "Male", `2` = "Female"),
+  md_tcga[samples_tcga, ]$tcga.gdc_cases.demographic.gender %>% str_to_title()
+)
+
+pca_df$Age <- c(
+  md_gtex[samples_gtex, ]$gtex.age,
+  as.character(round(as.numeric(md_tcga[samples_tcga, ]$tcga.gdc_cases.diagnoses.age_at_diagnosis) / 365.25, 0))
+)
+
+pca_df$AvgQ <- c(md_gtex[samples_gtex, ]$recount_seq_qc.avgq, 
+                 md_tcga[samples_tcga, ]$recount_seq_qc.avgq)
+
+# Variabile numerica per il menu a tendina
+pca_df$AgeNumeric <- as.numeric(gsub("[^0-9]", "", pca_df$Age))
+```
+
+
+```{r}
+# Grafico statico per il report (Dataset Distinction)
 ggplot(pca_df, aes(x = PC1, y = PC2, color = Group)) +
   geom_point(size = 3, alpha = 0.7) +
   theme_minimal() +
@@ -439,56 +461,123 @@ ggplot(pca_df, aes(x = PC1, y = PC2, color = Group)) +
        y = paste0("PC2 (", round(100*summary(pca_res)$importance[2,2], 1), "%)"))
 
 ```
+
 ```{r}
-
-pca_df$AvgQ <- c(md_gtex[colnames(counts_gtex2), ]$recount_seq_qc.avgq, 
-                 md_tcga[colnames(counts_tcga2), ]$recount_seq_qc.avgq)
-pca_df$AgeNumeric <- as.numeric(gsub("[^0-9]", "", pca_df$Age)) 
-
-p <- plot_ly(pca_df, x = ~PC1, y = ~PC2, 
+# Grafico interattivo per l'esplorazione delle variabili
+p_inter <- plot_ly(pca_df, x = ~PC1, y = ~PC2, 
              symbol = ~Group,
              symbols = c('circle', 'x'),
              text = ~paste("Sample:", SampleID, "<br>Sex:", Sex, "<br>Age:", Age, "<br>AvgQ:", AvgQ),
              type = "scatter", mode = "markers",
              marker = list(size = 10, opacity = 0.8)) %>%
   layout(
-    title = "PCA: Interactive Color Switching",
+    title = "Interactive PCA: Metadata Exploration",
     xaxis = list(title = "PC1"),
     yaxis = list(title = "PC2"),
     updatemenus = list(
       list(
-        x = 0.05,
-        y = 1,
-        xanchor = "left",
-        yanchor = "top",
+        x = 0.05, y = 1, xanchor = "left", yanchor = "top",
         buttons = list(
           list(method = "restyle",
                args = list("marker.color", list(ifelse(pca_df$Group == "GTEx", "blue", "red"))),
                label = "Color by Dataset"),
-          
           list(method = "restyle",
                args = list("marker.color", list(ifelse(pca_df$Sex == "Male", "#1f77b4", "#e377c2"))),
                label = "Color by Sex"),
-          
           list(method = "restyle",
                args = list("marker.color", list(pca_df$AgeNumeric),
-                           "marker.colorscale", "Viridis",
-                           "marker.showscale", TRUE),
+                           "marker.colorscale", "Viridis", "marker.showscale", TRUE),
                label = "Color by Age"),
-
           list(method = "restyle",
                args = list("marker.color", list(pca_df$AvgQ),
-                           "marker.colorscale", "Plasma",
-                           "marker.showscale", TRUE),
+                           "marker.colorscale", "Plasma", "marker.showscale", TRUE),
                label = "Color by RNA Quality")
         )
       )
     )
   )
 
-p
-
+p_inter
 ```
+
+
+```{r}
+# We estimate the variance for each row in the logcounts matrix
+var_genes <- apply(logcounts_all, 1, var)
+
+# Get the gene names for the top 100 most variable genes
+select_var <- names(sort(var_genes, decreasing=TRUE))[1:100]
+
+# Keep the expression values for the top 100 variable genes
+highly_variable_lcpm <- logcounts_all[select_var,]
+dim(highly_variable_lcpm)
+
+# Setup colors
+mypalette <- brewer.pal(11,"RdYlBu")
+morecols <- colorRampPalette(mypalette)
+
+# Assign blue and red to different datasets
+col.cell <- ifelse(pca_df$Group == "GTEx", "blue", "red")
+
+
+heatmap.2(highly_variable_lcpm, 
+          col=rev(morecols(50)),
+          trace="none", 
+          main="Top 100 most variable genes across samples",
+          ColSideColors=col.cell,
+          scale="row",
+          labCol="",      # Hide sample names for clarity
+          cexRow=0.6,     # Adjust gene name size
+          srtCol=45
+)
+
+# Add Legend
+legend("topright", 
+       legend = c("GTEx (Healthy)", "TCGA (Tumor)"), 
+       col = c("blue", "red"), 
+       lty = 1, 
+       lwd = 10, 
+       cex = 0.7)
+```
+```{r}
+# We estimate the variance for each row in the logcounts matrix
+var_genes <- apply(logcounts_all, 1, var)
+
+# Get the gene names for the top 100 LEAST variable genes (lowest variance)
+select_var_low <- names(sort(var_genes, decreasing = FALSE))[1:100]
+
+# Keep the expression values for the top 100 least variable genes
+least_variable_lcpm <- logcounts_all[select_var_low,]
+dim(least_variable_lcpm)
+
+# Setup colors
+mypalette <- brewer.pal(11,"RdYlBu")
+morecols <- colorRampPalette(mypalette)
+
+# Assign blue and red to different datasets
+col.cell <- ifelse(pca_df$Group == "GTEx", "blue", "red")
+
+
+heatmap.2(least_variable_lcpm, 
+          col=rev(morecols(50)),
+          trace="none", 
+          main="Top 100 LEAST variable genes across samples",
+          ColSideColors=col.cell,
+          scale="row",
+          labCol="",      # Hide sample names for clarity
+          cexRow=0.6,     # Adjust gene name size
+          srtCol=45
+)
+
+# Add Legend
+legend("topright", 
+       legend = c("GTEx (Healthy)", "TCGA (Tumor)"), 
+       col = c("blue", "red"), 
+       lty = 1, 
+       lwd = 10, 
+       cex = 0.7)
+```
+
 
 
 ## 4.2. DE Analysis
