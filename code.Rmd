@@ -643,3 +643,115 @@ legend("topright", legend = c("GTEx (Lowest Mean)", "TCGA (Lowest Mean)", "Globa
        fill = c("blue", "red", NA), border = c("black", "black", NA),
        lty = c(NA, NA, 2), col = c(NA, NA, "darkgreen"), bty = "n")
 ```
+### 4.2.1. Naive Approach
+
+```{r}
+
+# Save the normalized data into a new variable
+simple_deg <- logcounts_all 
+
+# Gather the columns corresponding to the 2 groups
+gtex_cols <- which(pca_df$Group == "GTEx")
+tcga_cols <- which(pca_df$Group == "TCGA")
+
+```
+
+**Perform a t-test on the groups and optain the p-value**
+
+```{r}
+p_values <- apply(simple_deg, 1, function(x) {
+  t.test(x[gtex_cols], x[tcga_cols])$p.value
+})
+```
+
+**Calculate foldchange**
+
+```{r}
+log2FC <- rowMeans(simple_deg[, tcga_cols]) - rowMeans(simple_deg[, gtex_cols])
+results_ttest <- data.frame(
+  gene = rownames(simple_deg),
+  log2FC = log2FC,
+  p_value = p_values
+)
+results_ttest
+```
+
+**Adjust p-values using Benjamini-Hochberg**
+
+```{r}
+
+results_ttest$adj_p <- p.adjust(results_ttest$p_value, method = "BH")
+
+results_ttest$significant <- with(results_ttest, 
+                                  ifelse(adj_p < 0.01 & abs(log2FC) > 1, "Significant", "Non Significant"))
+```
+
+**Plot the result using vulgano plot**
+
+```{r}
+results_ttest$direction <- with(results_ttest, 
+                                 ifelse(adj_p < 0.01 & log2FC > 1, "Up Regulated",
+                                 ifelse(adj_p < 0.01 & log2FC < -1, "Down Regulated", "Non Significant")))
+
+ggplot(results_ttest, aes(x = log2FC, y = -log10(adj_p), color = direction)) +
+  geom_point(alpha = 0.5, size = 1.5) + 
+  scale_color_manual(values = c("Down Regulated" = "blue", 
+                                "Non Significant" = "grey", 
+                                "Up Regulated" = "red")) +
+  theme_minimal() + 
+  
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "black") + 
+  geom_hline(yintercept = -log10(0.01), linetype = "dashed", color = "black") +
+  
+  
+  labs(title = "Volcano Plot: GBM vs Healthy Cortex (t-test)",
+       subtitle = "Thresholds: |Log2FC| > 1 and FDR < 0.01",
+       x = "log2 Fold Change",
+       y = "-log10 FDR (BH Adjusted)") +
+  
+  theme(legend.title = element_blank(),
+        legend.position = "bottom")
+```
+
+### 4.2.2. EdgeR Approach
+
+The use of generalized linear models (GLMs) in edgeR allows us to model biological variability (overdispersion) inherent in RNA-seq data, overcoming the limitations of simple t-tests.
+
+**Create a Design Matrix**
+
+The design matrix defines the mathematical framework for the statistical comparison. In our case, we compare the tumor group (TCGA) against the healthy baseline (GTEx).
+
+```{r}
+
+# Retrieve the conditions in our dataset (GTEx vs TCGA)
+group <- factor(pca_df$Group, levels = c("GTEx", "TCGA"))
+
+# Specify a design matrix with an intercept term (GTEx is the reference/baseline)
+design <- model.matrix(~ group)
+colnames(design) <- c("Intercept", "TCGA_vs_GTEx")
+head(design)
+
+```
+**Dispersion Estimation**
+
+Estimating dispersion is a crucial step to distinguish true biological signal from random technical noise.
+
+```{r}
+# Three dispersion estimation steps to account for overdispersion in RNA-Seq data
+dgeObj <- estimateCommonDisp(dgeObj)
+dgeObj <- estimateGLMTrendedDisp(dgeObj)
+dgeObj <- estimateTagwiseDisp(dgeObj)
+
+# Visualize the Biological Coefficient of Variation (BCV)
+plotBCV(dgeObj)
+```
+**GLM Fitting and Likelihood Ratio Test (LRT)**
+
+```{r}
+fit <- glmFit(dgeObj, design)
+lrt <- glmLRT(fit, coef = 2)
+
+# Extract the most significantly differentially expressed genes
+results_edgeR <- as.data.frame(topTags(lrt, n = Inf))
+head(results_edgeR)
+```
