@@ -31,12 +31,12 @@ library(RColorBrewer)
 library(org.Hs.eg.db)
 library(AnnotationDbi)
 ```
+
 ```{r}
 library(clusterProfiler)
 library(org.Hs.eg.db) 
 library(enrichplot)
 ```
-
 
 # 1. Project Introduction
 
@@ -808,6 +808,7 @@ ggplot(results_edgeR, aes(x = logFC, y = -log10(FDR), color = direction)) +
        y = "-log10 FDR") +
   theme(legend.position = "bottom", legend.title = element_blank())
 ```
+
 **Retrieve Gene Names**
 
 ```{r}
@@ -834,6 +835,7 @@ results$GENENAME <- mapIds(org.Hs.eg.db,
 # Check the first few rows of the annotated results
 head(results)
 ```
+
 **Find the gene symbols of the genes tested**
 
 ```{r}
@@ -846,6 +848,7 @@ gene_annotations <- AnnotationDbi::select(org.Hs.eg.db,
 # View the result
 head(gene_annotations)
 ```
+
 **Overlapping set of DEGs (Upset Plot)**
 
 ```{r}
@@ -864,6 +867,7 @@ UpSetR::upset(UpSetR::fromList(gene_lists),
               sets.bar.color = "blue")
 
 ```
+
 **Function enrichment analysis on the genes we obtain through edgeR**
 
 ```{r}
@@ -891,3 +895,233 @@ ora_analysis_bp <- pairwise_termsim(ego, method = "JC")
 emapplot(ora_analysis_bp, color = "qvalue")
 ```
 
+# 5. Protein-Protein Interaction (PPI) Network analysis
+
+### Rationale
+
+Genes do not act in isolation, but their protein products interact in complex networks to carry out cellular functions. Differential gene expression analysis identifies genes associated with the disease condition, but does not provide information on how these genes interact at the protein level.
+
+Protein–Protein Interaction (PPI) networks allow the integration of transcriptomic results with proteomic knowledge, enabling the identification of key proteins (hubs), functional modules, and dysregulated biological pathways involved in the disease. This network-based approach follows the principles of network medicine, where disease-associated genes tend to cluster into connected subnetworks (disease modules).
+
+```{r}
+library(STRINGdb)
+library(igraph)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(enrichplot)
+library(tidyverse)
+
+```
+
+```{r}
+deg_idx <- which(
+  results_edgeR$FDR < 0.05 &
+  abs(results_edgeR$logFC) > 1
+)
+
+deg_genes <- rownames(results_edgeR)[deg_idx]
+
+length(deg_genes)
+head(deg_genes)
+
+
+```
+
+Differentially expressed genes were selected using an edgeR-based analysis, applying a false discovery rate (FDR) threshold of 0.05 and an absolute log2 fold change greater than 1.
+
+```{r}
+deg_genes_clean <- sub("\\..*$", "", deg_genes)
+head(deg_genes_clean)
+```
+
+Gene identifiers were originally annotated using Ensembl IDs including version numbers. Version information was removed to ensure compatibility with downstream annotation databases.
+
+```{r}
+
+gene_mapping <- bitr(
+  deg_genes_clean,
+  fromType = "ENSEMBL",
+  toType   = "SYMBOL",
+  OrgDb    = org.Hs.eg.db
+)
+
+head(gene_mapping)
+```
+
+```{r}
+deg_symbols <- unique(gene_mapping$SYMBOL)
+
+length(deg_symbols)
+head(deg_symbols)
+```
+
+Ensembl gene identifiers were converted to gene symbols prior to PPI network construction. Genes that could not be mapped were excluded from downstream analyses.
+
+```{r}
+string_db <- STRINGdb$new(
+  version = "11.5",
+  species = 9606,
+  score_threshold = 700,
+  input_directory = ""
+)
+```
+
+```{r}
+mapped_genes <- string_db$map(
+  data.frame(gene = deg_symbols),
+  "gene",
+  removeUnmappedRows = TRUE
+)
+
+nrow(mapped_genes)
+head(mapped_genes)
+```
+
+### PPI Construction
+
+```{r}
+ppi_edges <- string_db$get_interactions(mapped_genes$STRING_id)
+
+ppi_graph <- graph_from_data_frame(
+  ppi_edges[, c("from", "to")],
+  directed = FALSE
+)
+```
+
+```{r}
+plot(
+  ppi_graph,
+  vertex.label = NA,
+  vertex.size = 3,
+  edge.color = "grey80",
+  vertex.color = "steelblue",
+  main = "Protein–Protein Interaction Network"
+)
+```
+
+The resulting PPI network is represented as an undirected graph, where nodes correspond to proteins and edges represent protein–protein interactions.
+
+```{r}
+deg <- degree(ppi_graph)
+bet <- betweenness(ppi_graph)
+```
+
+```{r}
+deg_df <- data.frame(degree = deg)
+
+ggplot(deg_df, aes(x = degree)) +
+  geom_histogram(bins = 40, fill = "steelblue", color = "black") +
+  scale_y_log10() +
+  theme_minimal() +
+  labs(
+    title = "Degree distribution of the PPI network",
+    x = "Node degree",
+    y = "Frequency (log scale)"
+  )
+
+```
+
+The right-skewed degree distribution indicates a scale-free topology, a common property of biological interaction networks characterized by the presence of highly connected hub proteins.
+
+```{r}
+top_hubs <- sort(deg, decreasing = TRUE)[1:10]
+top_hubs
+
+```
+
+```{r}
+centrality_df <- data.frame(
+  protein = names(deg),
+  degree = deg,
+  betweenness = bet
+)
+
+ggplot(centrality_df, aes(x = degree, y = betweenness)) +
+  geom_point(alpha = 0.6) +
+  scale_y_log10() +
+  theme_minimal() +
+  labs(
+    title = "Degree vs betweenness centrality",
+    x = "Degree",
+    y = "Betweenness (log scale)"
+  )
+
+```
+
+While hub proteins are characterized by a high number of interactions, proteins with high betweenness centrality act as connectors between different regions of the network and may coordinate distinct functional modules.
+
+```{r}
+communities <- cluster_louvain(ppi_graph)
+
+plot(
+  communities,
+  ppi_graph,
+  vertex.label = NA,
+  vertex.size = 4,
+  main = "PPI network communities (Louvain clustering)"
+)
+
+```
+
+```{r}
+
+entrez_ids <- bitr(
+  mapped_genes$gene,
+  fromType = "SYMBOL",
+  toType = "ENTREZID",
+  OrgDb = org.Hs.eg.db
+)
+
+kegg_enrich <- enrichKEGG(
+  gene = entrez_ids$ENTREZID,
+  organism = "hsa",
+  pvalueCutoff = 0.05
+)
+
+dotplot(kegg_enrich, showCategory = 10)
+
+```
+
+Functional enrichment analysis of the PPI network revealed significant over-representation of signaling pathways related to cell communication, calcium signaling, and extracellular matrix interactions. Although some KEGG pathways are annotated as neuronal, they include general signaling components such as receptors and ion channels that are also active in non-neuronal tissues, including cancer. Overall, these results support the biological relevance of the identified PPI network and highlight dysregulated signaling processes associated with the disease.
+
+```{r}
+components_ppi <- components(ppi_graph)
+
+table(components_ppi$csize)[1:5]
+largest_comp_size <- max(components_ppi$csize)
+largest_comp_size
+
+
+```
+
+Most proteins in the PPI network belong to a single large connected component, suggesting the presence of a coherent disease-associated module rather than isolated interactions.
+
+```{r}
+network_density <- edge_density(ppi_graph)
+avg_degree <- mean(deg)
+
+network_density
+avg_degree
+```
+
+```{r}
+lcc <- induced_subgraph(
+  ppi_graph,
+  V(ppi_graph)[components_ppi$membership ==
+               which.max(components_ppi$csize)]
+)
+
+distances_lcc <- distances(lcc)
+dist_df <- data.frame(distance = as.vector(distances_lcc))
+dist_df <- dist_df[is.finite(dist_df$distance), ]
+
+ggplot(dist_df, aes(x = distance)) +
+  geom_histogram(bins = 30, fill = "steelblue", color = "black") +
+  theme_minimal() +
+  labs(
+    title = "Shortest path length distribution",
+    x = "Shortest path length",
+    y = "Frequency"
+  )
+
+```
