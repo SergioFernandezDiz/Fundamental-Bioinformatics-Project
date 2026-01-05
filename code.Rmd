@@ -1105,15 +1105,14 @@ avg_degree
 ```
 
 ```{r}
-lcc <- induced_subgraph(
-  ppi_graph,
-  V(ppi_graph)[components_ppi$membership ==
-               which.max(components_ppi$csize)]
-)
+# Matrice delle distanze (igraph)
+dist_mat <- igraph::distances(lcc)
 
-distances_lcc <- distances(lcc)
-dist_df <- data.frame(distance = as.vector(distances_lcc))
-dist_df <- dist_df[is.finite(dist_df$distance), ]
+# Converto in vettore, tolgo Inf/NA, poi costruisco il data.frame
+dist_vec <- as.vector(dist_mat)
+dist_vec <- dist_vec[is.finite(dist_vec)]
+
+dist_df <- data.frame(distance = dist_vec)
 
 ggplot(dist_df, aes(x = distance)) +
   geom_histogram(bins = 30, fill = "steelblue", color = "black") +
