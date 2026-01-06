@@ -1105,6 +1105,11 @@ avg_degree
 ```
 
 ```{r}
+lcc <- induced_subgraph(
+  ppi_graph,
+  V(ppi_graph)[components_ppi$membership ==
+               which.max(components_ppi$csize)]
+)
 # Matrice delle distanze (igraph)
 dist_mat <- igraph::distances(lcc)
 
@@ -1124,3 +1129,174 @@ ggplot(dist_df, aes(x = distance)) +
   )
 
 ```
+# 6. Single-Cell RNA-seq Analysis
+
+## 6.1. Introduction
+
+To complement our bulk RNA-seq analysis comparing healthy brain cortex (GTEx) with glioblastoma (TCGA), we now perform single-cell RNA-seq analysis. This allows us to:
+
+- Identify specific cell types present in brain cortex tissue
+- Examine cell-type-specific expression patterns
+- Validate bulk RNA-seq findings at cellular resolution
+- Discover heterogeneous cell populations in the brain
+
+## 6.2. Package Installation and Loading
+
+```{r}
+# Install required packages (run once)
+if (!requireNamespace("BiocManager", quietly = TRUE)) 
+    install.packages("BiocManager")
+
+packages <- c("scRNAseq", "SingleCellExperiment", "Seurat", "SeuratData")
+install_if_missing <- function(pkg) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    BiocManager::install(pkg, ask = FALSE)
+  }
+}
+lapply(packages, install_if_missing)
+```
+
+```{r}
+# Load libraries
+library(scRNAseq)
+library(Seurat)
+library(SingleCellExperiment)
+library(tidyverse)
+library(ggplot2)
+library(patchwork)
+
+```
+## 6.3. Search and Load Brain Cortex Dataset
+### 6.3.1. Search for Brain/Cortex Datasets
+
+```{r}
+# Search for cortex-related datasets
+brain_datasets <- searchDatasets("cortex")
+cat("Brain/Cortex datasets available:\n")
+print(brain_datasets[, c("name", "title", "version")])
+```
+### 6.3.2. Select Dataset
+We select the human cortex dataset (hu-cortex-2017) which provides single-nucleus RNA-seq data from human cortex, matching the tissue type used in our bulk RNA-seq analysis (GTEx Brain - Cortex).
+
+
+```{r}
+# Check available paths for this dataset
+name <- "hu-cortex-2017"
+version <- "2023-12-20"
+
+cat("Available paths for", name, ":\n")
+available_paths <- listPaths(name, version)
+print(available_paths)
+
+```
+### 6.3.3. Download and Load Dataset
+```{r}
+# Fetch the dataset
+# Note: path should be one of the available paths from listPaths()
+# If there's no path (NULL), don't specify it
+cat("Downloading cortex single-cell dataset...\n")
+
+# Try with path first
+if(length(available_paths) > 0) {
+  path <- available_paths[1]  # Use first available path
+  cortex_sc <- fetchDataset(name, version, path)
+} else {
+  # If no paths, try without specifying path
+  cortex_sc <- fetchDataset(name, version)
+}
+
+# Display dataset information
+cat("\n=== Dataset Loaded Successfully ===\n")
+print(cortex_sc)
+cat("\nNumber of genes:", nrow(cortex_sc), "\n")
+cat("Number of cells:", ncol(cortex_sc), "\n")
+```
+
+## 6.4. Explore Dataset Metadata
+```{r}
+# View available metadata columns
+cat("Available metadata columns:\n")
+metadata_cols <- colnames(colData(cortex_sc))
+print(metadata_cols)
+
+# Display metadata content
+cat("\nMetadata content:\n")
+head(colData(cortex_sc))
+```
+
+### 6.4.1. Metadata Summary
+```{r}
+cat("=== Dataset Metadata Summary ===\n\n")
+cat("Available columns:", length(metadata_cols), "\n")
+cat("Columns:", paste(metadata_cols, collapse = ", "), "\n\n")
+
+# Check protocol column
+if("protocol" %in% metadata_cols) {
+  cat("Protocol values:\n")
+  print(table(cortex_sc$protocol))
+}
+
+cat("\n**Note:** This dataset does not include pre-annotated cell types.\n")
+cat("We will identify cell types through unsupervised clustering and marker gene analysis.\n")
+```
+### 6.4.2. Basic Data Quality Metrics
+```{r}
+print(cortex_sc)
+cat("\nNumber of genes:", nrow(cortex_sc), "\n")
+cat("Number of cells:", ncol(cortex_sc), "\n")
+```
+## 6.5. Prepare Data for Seurat
+### 6.5.1. Extract Count Matrix
+```{r}
+# Get the count matrix
+cat("Extracting count matrix...\n")
+counts_matrix <- assay(cortex_sc, "counts")
+
+cat("Count matrix dimensions:\n")
+cat("Genes:", nrow(counts_matrix), "\n")
+cat("Cells:", ncol(counts_matrix), "\n")
+
+# Check for data quality issues
+cat("\nChecking for duplicates and NA values...\n")
+cat("Duplicate rownames (genes):", anyDuplicated(rownames(counts_matrix)), "\n")
+cat("Duplicate colnames (cells):", anyDuplicated(colnames(counts_matrix)), "\n")
+cat("NA in rownames:", sum(is.na(rownames(counts_matrix))), "\n")
+cat("Empty rownames:", sum(rownames(counts_matrix) == ""), "\n")
+cat("NA in colnames:", sum(is.na(colnames(counts_matrix))), "\n")
+cat("Empty colnames:", sum(colnames(counts_matrix) == ""), "\n")
+
+```
+
+### 6.5.2. Handle Duplicate Gene Names
+```{r}
+# Make rownames (gene names) unique if needed
+if(anyDuplicated(rownames(counts_matrix)) > 0) {
+  cat("Making gene names unique...\n")
+  rownames(counts_matrix) <- make.unique(rownames(counts_matrix))
+  cat("Gene names are now unique.\n")
+} else {
+  cat("No duplicate gene names found.\n")
+}
+
+# Verify no duplicates remain
+cat("Final check - Duplicate genes:", anyDuplicated(rownames(counts_matrix)), "\n")
+
+```
+## 6.6. Create Seurat Object
+```{r}
+# Create Seurat object
+cat("Creating Seurat object...\n")
+brain.seurat.obj <- CreateSeuratObject(
+  counts = counts_matrix,
+  project = "Brain_Cortex_scRNA",
+  min.cells = 3,        # Keep genes detected in at least 3 cells
+  min.features = 200    # Keep cells with at least 200 detected genes
+)
+
+# Display Seurat object summary
+cat("\n=== Seurat Object Created Successfully ===\n")
+print(brain.seurat.obj)
+
+```
+
+
