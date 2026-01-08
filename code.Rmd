@@ -1143,9 +1143,9 @@ To complement our bulk RNA-seq analysis comparing healthy brain cortex (GTEx) wi
 ## 6.2. Package Installation and Loading
 
 ```{r}
-# Install required packages (run once)
-if (!requireNamespace("BiocManager", quietly = TRUE)) 
-    install.packages("BiocManager")
+# Bioconductor packages
+if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+# BiocManager::install(c("scRNAseq", "SingleCellExperiment", "Seurat", "SeuratData"), ask = FALSE)
 
 packages <- c("scRNAseq", "SingleCellExperiment", "Seurat", "SeuratData")
 install_if_missing <- function(pkg) {
@@ -1161,9 +1161,9 @@ lapply(packages, install_if_missing)
 library(scRNAseq)
 library(Seurat)
 library(SingleCellExperiment)
-library(tidyverse)
-library(ggplot2)
-library(patchwork)
+library(dplyr)      # For data manipulation
+library(ggplot2)    # For plotting
+library(patchwork)  # For combining plots (needed for p1 + p2 + p3)
 
 ```
 ## 6.3. Search and Load Brain Cortex Dataset
@@ -1173,7 +1173,7 @@ library(patchwork)
 # Search for cortex-related datasets
 brain_datasets <- searchDatasets("cortex")
 cat("Brain/Cortex datasets available:\n")
-print(brain_datasets[, c("name", "title", "version")])
+print(brain_datasets[, c("name", "title", "version", "path", "description")])
 ```
 ### 6.3.2. Select Dataset
 We select the human cortex dataset (hu-cortex-2017) which provides single-nucleus RNA-seq data from human cortex, matching the tissue type used in our bulk RNA-seq analysis (GTEx Brain - Cortex).
@@ -1192,18 +1192,9 @@ print(available_paths)
 ### 6.3.3. Download and Load Dataset
 ```{r}
 # Fetch the dataset
-# Note: path should be one of the available paths from listPaths()
-# If there's no path (NULL), don't specify it
-cat("Downloading cortex single-cell dataset...\n")
-
-# Try with path first
-if(length(available_paths) > 0) {
-  path <- available_paths[1]  # Use first available path
-  cortex_sc <- fetchDataset(name, version, path)
-} else {
-  # If no paths, try without specifying path
-  cortex_sc <- fetchDataset(name, version)
-}
+path = "cortex"
+cortex_sc <- fetchDataset(name,version,path)
+cortex_sc
 
 # Display dataset information
 cat("\n=== Dataset Loaded Successfully ===\n")
@@ -1246,57 +1237,453 @@ cat("\nNumber of genes:", nrow(cortex_sc), "\n")
 cat("Number of cells:", ncol(cortex_sc), "\n")
 ```
 ## 6.5. Prepare Data for Seurat
-### 6.5.1. Extract Count Matrix
+Objective
+
+The scRNA-seq dataset was downloaded as a SingleCellExperiment object.
+Before performing downstream single-cell analysis (normalization, dimensionality reduction, clustering), the data must be converted into a Seurat object, which requires:
+
+A standard sparse count matrix
+
+Unique gene (feature) names
+
+Unique cell identifiers
+
+Proper integration of cell-level metadata
+### 6.5.1 Inspect available assays
+We first verify which assays are available in the dataset and confirm the presence of raw counts.
 ```{r}
-# Get the count matrix
-cat("Extracting count matrix...\n")
-counts_matrix <- assay(cortex_sc, "counts")
+# List available assays
+assays(cortex_sc)
 
-cat("Count matrix dimensions:\n")
-cat("Genes:", nrow(counts_matrix), "\n")
-cat("Cells:", ncol(counts_matrix), "\n")
+# Access the raw counts matrix
+assay(cortex_sc, "counts")
+``` 
 
-# Check for data quality issues
-cat("\nChecking for duplicates and NA values...\n")
-cat("Duplicate rownames (genes):", anyDuplicated(rownames(counts_matrix)), "\n")
-cat("Duplicate colnames (cells):", anyDuplicated(colnames(counts_matrix)), "\n")
-cat("NA in rownames:", sum(is.na(rownames(counts_matrix))), "\n")
-cat("Empty rownames:", sum(rownames(counts_matrix) == ""), "\n")
-cat("NA in colnames:", sum(is.na(colnames(counts_matrix))), "\n")
-cat("Empty colnames:", sum(colnames(counts_matrix) == ""), "\n")
+### 6.5.2 Inspect dataset metadata
+```{r}
+colnames(colData(cortex_sc))
 
 ```
 
-### 6.5.2. Handle Duplicate Gene Names
 ```{r}
-# Make rownames (gene names) unique if needed
-if(anyDuplicated(rownames(counts_matrix)) > 0) {
-  cat("Making gene names unique...\n")
-  rownames(counts_matrix) <- make.unique(rownames(counts_matrix))
-  cat("Gene names are now unique.\n")
-} else {
-  cat("No duplicate gene names found.\n")
-}
-
-# Verify no duplicates remain
-cat("Final check - Duplicate genes:", anyDuplicated(rownames(counts_matrix)), "\n")
+colnames(rowData(cortex_sc))
+head(rowData(cortex_sc))
 
 ```
-## 6.6. Create Seurat Object
+No gene-level metadata is provided (rowData is empty), meaning gene identifiers are stored directly as row names in the count matrix.
+
+### 6.5.3 Extract and standardize the count matrix
 ```{r}
-# Create Seurat object
-cat("Creating Seurat object...\n")
-brain.seurat.obj <- CreateSeuratObject(
-  counts = counts_matrix,
-  project = "Brain_Cortex_scRNA",
-  min.cells = 3,        # Keep genes detected in at least 3 cells
-  min.features = 200    # Keep cells with at least 200 detected genes
+# Extract raw counts
+counts <- assay(cortex_sc, "counts")
+
+# Convert to standard sparse matrix
+counts <- as(counts, "dgCMatrix")
+
+
+```
+
+### 6.5.4 Ensure unique gene and cell identifiers
+```{r}
+# Make feature (gene) names unique
+rownames(counts) <- make.unique(rownames(counts))
+
+# Make cell names unique
+colnames(counts) <- make.unique(colnames(counts))
+
+
+```
+
+### 6.5.5 Create the Seurat object
+```{r}
+so <- CreateSeuratObject(
+  counts = counts,
+  project = "hu_cortex_2017_cortex"
 )
 
-# Display Seurat object summary
-cat("\n=== Seurat Object Created Successfully ===\n")
-print(brain.seurat.obj)
+so
+
+```
+
+### 6.5.6 Add cell-level metadata
+```{r}
+meta <- as.data.frame(colData(cortex_sc))
+rownames(meta) <- colnames(counts)
+
+so <- AddMetaData(so, metadata = meta)
+
+head(so@meta.data)
+
+
+```
+## 6.6. Quality Control and Filtering
+
+### 6.6.1. Calculate QC Metrics
+
+```{r}
+# Calculate percentage of mitochondrial genes
+so[["percent.mt"]] <- PercentageFeatureSet(so, pattern = "^MT-")
+
+# View updated metadata
+head(so@meta.data)
+```
+
+### 6.6.2. Visualize QC Metrics
+```{r}
+# Violin plots for quality control metrics
+VlnPlot(so, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), 
+        ncol = 3, pt.size = 0.1)
+```
+
+### 6.6.3. Feature Scatter Plots
+
+```{r}
+library(ggplot2)
+# Scatter plot to examine relationship between total counts and detected genes
+FeatureScatter(so, feature1 = "nCount_RNA", feature2 = "nFeature_RNA") +
+  geom_smooth(method = "lm")
+
+# Scatter plot for mitochondrial content vs gene count
+FeatureScatter(so, feature1 = "nCount_RNA", feature2 = "percent.mt") +
+  geom_smooth(method = "lm")
+```
+
+### 6.6.4. Filter Cells
+```{r}
+# Filter based on QC metrics
+# Adjust thresholds based on your violin plots
+so <- subset(so, subset = nFeature_RNA > 200 & 
+                          nFeature_RNA < 2500 & 
+                          percent.mt < 5)
+
+cat("Cells after filtering:", ncol(so), "\n")
+cat("Genes:", nrow(so), "\n")
 
 ```
 
 
+## 6.7. Normalization
+
+Normalize the raw gene expression data to enable meaningful comparison between cells. The `NormalizeData()` function applies log-normalization:
+
+$$
+\text{Normalized}_{ij} = \log_1p \left( \frac{\text{Counts}_{ij}}{\sum_{k} \text{Counts}_{kj}} \times 10000 \right)
+$$
+
+This corrects for differences in sequencing depth between cells while preserving biological differences.
+
+```{r}
+# Log-normalize the data
+so <- NormalizeData(so, 
+                    normalization.method = "LogNormalize", 
+                    scale.factor = 10000)
+
+cat("Normalization complete.\n")
+cat("Normalized data stored in 'data' layer.\n")
+```
+
+## 6.8. Identify Highly Variable Features
+
+Identify genes that show high cell-to-cell variation. These genes are most informative for distinguishing cell types and will be used for downstream analysis.
+
+```{r}
+# Find variable features using variance stabilizing transformation
+so <- FindVariableFeatures(so, 
+                           selection.method = "vst", 
+                           nfeatures = 2000)
+
+# Identify the top 10 most variable genes
+top10_var <- head(VariableFeatures(so), 10)
+cat("Top 10 most variable genes:\n")
+print(top10_var)
+```
+
+### 6.8.1. Visualize Variable Features
+```{r}
+# Plot variable features
+plot1 <- VariableFeaturePlot(so)
+plot2 <- LabelPoints(plot = plot1, points = top10_var, repel = TRUE)
+plot2
+```
+
+## 6.9. Scale Data
+
+Scaling standardizes gene expression values by centering (subtracting the mean) and scaling (dividing by standard deviation). This ensures that highly expressed genes do not dominate downstream analyses.
+
+```{r}
+# Scale all genes
+all_genes <- rownames(so)
+so <- ScaleData(so, features = all_genes)
+
+cat("Scaling complete.\n")
+cat("Scaled data dimensions:", dim(so[["RNA"]]$scale.data), "\n")
+```
+
+## 6.10. Linear Dimensionality Reduction (PCA)
+
+Principal Component Analysis (PCA) reduces the dimensionality of the data while preserving the most important sources of variation.
+
+```{r}
+# Run PCA on variable features
+so <- RunPCA(so, features = VariableFeatures(object = so))
+
+# View PCA results
+print(so[["pca"]], dims = 1:5, nfeatures = 5)
+```
+
+### 6.10.1. Visualize PCA Results
+```{r}
+# Visualize top genes contributing to PC1 and PC2
+VizDimLoadings(so, dims = 1:2, reduction = "pca")
+```
+
+```{r}
+# PCA plot
+DimPlot(so, reduction = "pca")
+```
+
+```{r}
+# Heatmap of top genes in first principal component
+DimHeatmap(so, dims = 1, cells = 500, balanced = TRUE)
+```
+
+### 6.10.2. Determine Dimensionality (Elbow Plot)
+
+The elbow plot helps determine how many principal components capture meaningful biological signal.
+
+```{r}
+# Elbow plot to determine optimal number of PCs
+ElbowPlot(so, ndims = 30)
+```
+
+Based on the elbow plot, we select the number of PCs where the curve starts to flatten. Typically 10-20 PCs capture most biological variation.
+
+## 6.11. Clustering
+
+### 6.11.1. Find Neighbors
+
+Construct a shared nearest neighbor (SNN) graph to identify similar cells.
+
+```{r}
+# Find neighbors using selected PCs (adjust dims based on elbow plot)
+so <- FindNeighbors(so, dims = 1:15)
+```
+
+### 6.11.2. Find Clusters
+
+Cluster cells using the Louvain algorithm at multiple resolutions to explore different granularities.
+
+```{r}
+# Cluster at multiple resolutions
+so <- FindClusters(so, resolution = c(0.1, 0.3, 0.5, 0.8, 1.0))
+
+# View clustering results in metadata
+head(so@meta.data)
+```
+
+```{r}
+# Compare different resolutions
+cat("Number of clusters at each resolution:\n")
+cat("Resolution 0.1:", length(unique(so$RNA_snn_res.0.1)), "clusters\n")
+cat("Resolution 0.3:", length(unique(so$RNA_snn_res.0.3)), "clusters\n")
+cat("Resolution 0.5:", length(unique(so$RNA_snn_res.0.5)), "clusters\n")
+cat("Resolution 0.8:", length(unique(so$RNA_snn_res.0.8)), "clusters\n")
+cat("Resolution 1.0:", length(unique(so$RNA_snn_res.1)), "clusters\n")
+```
+
+### 6.11.3. Set Cluster Identity
+
+Choose an appropriate resolution for downstream analysis.
+
+```{r}
+# Set identity to resolution 0.5 (adjust based on your data)
+Idents(so) <- "RNA_snn_res.0.5"
+
+cat("Active identity set to resolution 0.5\n")
+cat("Number of clusters:", length(unique(Idents(so))), "\n")
+```
+
+## 6.12. Non-linear Dimensionality Reduction (UMAP)
+
+UMAP provides a 2D visualization that preserves local and global structure of the data.
+
+```{r}
+# Run UMAP
+so <- RunUMAP(so, dims = 1:15)
+```
+
+### 6.12.1. Visualize UMAP
+```{r}
+# UMAP plot colored by cluster
+DimPlot(so, reduction = "umap", label = TRUE, pt.size = 0.5) +
+  ggtitle("UMAP - Clusters (Resolution 0.5)")
+```
+
+```{r}
+# Compare clustering at different resolutions
+p1 <- DimPlot(so, reduction = "umap", group.by = "RNA_snn_res.0.1", label = TRUE) + 
+  ggtitle("Resolution 0.1")
+p2 <- DimPlot(so, reduction = "umap", group.by = "RNA_snn_res.0.5", label = TRUE) + 
+  ggtitle("Resolution 0.5")
+p3 <- DimPlot(so, reduction = "umap", group.by = "RNA_snn_res.1", label = TRUE) + 
+  ggtitle("Resolution 1.0")
+
+p1 + p2 + p3
+```
+
+## 6.13. Cell Type Annotation
+
+### 6.13.1. Find Cluster Markers
+
+Identify marker genes that define each cluster. These genes are differentially expressed in one cluster compared to all others.
+
+```{r}
+# Find markers for all clusters
+all_markers <- FindAllMarkers(so, 
+                               only.pos = TRUE, 
+                               min.pct = 0.25, 
+                               logfc.threshold = 0.25)
+
+# View top markers per cluster
+top_markers <- all_markers %>%e
+  group_by(cluster) %>%
+  slice_max(n = 5, order_by = avg_log2FC)
+
+print(top_markers)
+```
+
+### 6.13.2. Visualize Top Markers
+```{r}
+# Get top 2 markers per cluster for visualization
+top2_markers <- all_markers %>%
+  group_by(cluster) %>%
+  slice_max(n = 2, order_by = avg_log2FC) %>%
+  pull(gene) %>%
+  unique()
+
+# Dot plot of top markers
+DotPlot(so, features = top2_markers) + 
+  RotatedAxis() +
+  ggtitle("Top Marker Genes per Cluster")
+```
+
+
+### 6.13.3. Annotate Clusters
+
+Based on marker gene expression, assign cell type labels to clusters.
+
+```{r}
+# Create a named vector mapping cluster numbers to cell types
+# IMPORTANT: Adjust these based on YOUR marker expression patterns!
+# This is an example - you need to examine your plots and assign accordingly
+
+# First, check current cluster IDs
+cat("Current cluster IDs:\n")
+print(levels(Idents(so)))
+
+# Example annotation (MODIFY based on your actual marker expression!)
+# You need to look at DotPlot and FeaturePlot results to determine which cluster is which cell type
+cluster_annotations <- c(
+  "0" = "Excitatory Neurons",
+  "1" = "Inhibitory Neurons", 
+  "2" = "Oligodendrocytes",
+  "3" = "Astrocytes",
+  "4" = "Microglia",
+  "5" = "OPCs",
+  "6" = "Endothelial"
+  # Add more clusters as needed based on your data
+)
+
+# Only annotate clusters that exist in your data
+existing_clusters <- as.character(unique(Idents(so)))
+cluster_annotations <- cluster_annotations[names(cluster_annotations) %in% existing_clusters]
+
+# Add cell type annotations to metadata
+so$cell_type <- as.character(Idents(so))
+for(cluster_id in names(cluster_annotations)) {
+  so$cell_type[so$cell_type == cluster_id] <- cluster_annotations[cluster_id]
+}
+
+# View annotation summary
+cat("\nCell type annotations:\n")
+print(table(so$cell_type))
+```
+
+### 6.13.4. Visualize Annotated Cell Types
+```{r}
+# UMAP with cell type annotations
+DimPlot(so, reduction = "umap", group.by = "cell_type", label = TRUE, pt.size = 0.5) +
+  ggtitle("UMAP - Annotated Cell Types (Human Cortex)")
+```
+
+## 6.14. Cell-Type Specific Differential Expression (Optional)
+
+This section identifies genes that are differentially expressed between specific cell types, which can be compared with bulk RNA-seq results.
+
+### 6.14.1. Compare Two Cell Types
+```{r}
+# Example: Compare excitatory vs inhibitory neurons
+# Adjust cell type names based on your annotations
+
+Idents(so) <- "cell_type"
+
+# Check available cell types
+cat("Available cell types for comparison:\n")
+print(unique(Idents(so)))
+```
+
+```{r}
+# Find markers between two cell types (example)
+# Uncomment and modify based on your cell types
+
+# de_neurons <- FindMarkers(so, 
+#                           ident.1 = "Excitatory Neurons", 
+#                           ident.2 = "Inhibitory Neurons",
+#                           min.pct = 0.25)
+# 
+# head(de_neurons, 20)
+```
+
+### 6.14.2. Cell Type Proportions
+```{r}
+# Calculate cell type proportions
+cell_type_counts <- table(so$cell_type)
+cell_type_props <- prop.table(cell_type_counts) * 100
+
+# Create proportion dataframe
+prop_df <- data.frame(
+  CellType = names(cell_type_props),
+  Proportion = as.numeric(cell_type_props)
+)
+
+# Plot cell type proportions
+ggplot(prop_df, aes(x = reorder(CellType, -Proportion), y = Proportion, fill = CellType)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none") +
+  labs(title = "Cell Type Proportions in Human Cortex",
+       x = "Cell Type",
+       y = "Percentage of Cells")
+```
+
+## 6.15. Save Results
+
+```{r}
+# Save the processed Seurat object
+saveRDS(so, file = "human_cortex_scRNA_processed.rds")
+cat("Seurat object saved to 'human_cortex_scRNA_processed.rds'\n")
+```
+
+## 6.16. Summary
+
+This single-cell RNA-seq analysis of human cortex tissue has:
+
+1. **Quality Control**: Filtered cells based on gene counts and mitochondrial content
+2. **Normalization**: Applied log-normalization to account for sequencing depth
+3. **Feature Selection**: Identified 2,000 highly variable genes
+4. **Dimensionality Reduction**: Performed PCA and UMAP for visualization
+5. **Clustering**: Identified distinct cell populations using graph-based clustering
+6. **Cell Type Annotation**: Assigned cell type labels based on known marker genes
+
+The identified cell types in the healthy human cortex can now be compared with bulk RNA-seq findings to understand cell-type-specific contributions to gene expression changes observed in glioblastoma.
