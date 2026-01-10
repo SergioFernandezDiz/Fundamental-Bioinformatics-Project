@@ -30,9 +30,6 @@ library(gplots)
 library(RColorBrewer)
 library(org.Hs.eg.db)
 library(AnnotationDbi)
-```
-
-```{r}
 library(clusterProfiler)
 library(org.Hs.eg.db) 
 library(enrichplot)
@@ -40,7 +37,49 @@ library(enrichplot)
 
 # 1. Project Introduction
 
-**da completare**
+**Project Rules**
+
+-   The project must be completed in groups of three students.
+
+-   Each group will submit a notebook with  code, discussion and everythink that is needed to run the notebook, one week before the exam date in January.
+
+-   During the exam, there will be a 10 minutes presentation followed by 20 minutes of interactive discussion with the instructors.
+
+-   All group members must be able to answer questions on any part of the project.
+
+**Project Objectives**
+
+Your work should demonstrate the ability to:
+
+-   Frame a biological problem computationally 
+
+-   Define a biological question and explain how computational methods can address it.
+
+-   Identify and download appropriate RNA-seq and single-cell datasets.
+
+-   Apply computational techniques and interpret results in a biological context.
+
+-   Be prepared to explain and justify your choices during the exam.
+
+**Required Components**
+
+Your project must include:
+
+1\. Differential Gene Expression Analysis (Bulk RNA-seq)
+
+-   Perform differential expression analysis between two conditions (e.g., healthy vs diseased tissue).
+
+2\. Protein-Protein Interaction (PPI) Network Analysis
+
+-   Use the list of differentially expressed genes to explore protein-protein interaction networks.
+
+3\. Single-Cell RNA-seq Analysis
+
+-   Download a small dataset (e.g., lung tissue from healthy and diseased samples).
+
+-   Dimensionality reduction (PCA, UMAP).
+
+-   Cluster identification and annotation of major cell types.
 
 # 2. Dataset Selection
 
@@ -51,13 +90,18 @@ projects
 
 ```
 
+The `available_projects()` function is used to retrieve all RNA-seq projects available in the recount3 database. As shown in the table, multiple projects are available, each containing RNA-seq data that can be used to perform gene expression analysis.
+
 ```{r}
 # Filter by GTEx (normal tissues)
 gtex_projects <- subset(projects, file_source == "gtex")
 
 # Explore metadata
 gtex_projects
+
 ```
+
+GTEx projects are selected because they provide RNA-seq data from healthy human tissues, which are used as controls for comparison with diseased samples.
 
 ```{r}
 
@@ -71,9 +115,15 @@ rse_gene_BRAIN <- create_rse(proj_info_pancreas)
 rse_gene_BRAIN
 ```
 
+GTEx BRAIN data are used as a reference for normal gene expression in healthy brain tissue.
+
+The dataset contains 63,856 genes and 2,931 samples, with gene annotations stored in `rowData` and 198 sample metadata variables available in `colData`.
+
 ```{r}
 colnames(colData(rse_gene_BRAIN))
 ```
+
+After defining the healthy reference using GTEx, we select tumor brain samples from TCGA. TCGA provides large-scale RNA-seq data from multiple cancer types and serves as the disease dataset for our analysis.
 
 ```{r}
 
@@ -104,13 +154,21 @@ print(demo_cols)
 
 ```
 
+Here we select the TCGA-GBM project to represent tumor brain tissue. The resulting dataset contains 63,856 genes across 175 tumor samples, stored as raw counts with associated gene annotations (`rowData`) and sample metadata (`colData`).
+
 ```{r}
 rse_gene_tcga
 ```
 
+At this stage, we have defined the two datasets used in this project. GTEx BRAIN data represent gene expression in healthy brain tissue and are used as the normal reference condition. TCGA GBM data represent tumor brain tissue and define the diseased condition.
+
 ## 2.1. Dataset Reduction
 
-**spiegare il problema che siccome di dati normali abbiamo quasi 3000 e solo 200 circa di dati con tumore dobbiamo fare una selezione per cercare di eliminare questo bias**
+Before performing differential gene expression analysis, we need to address an unbalanced dataset problem. As introduced earlier, the GTEx BRAIN dataset includes approximately 3,000 normal samples, while the TCGA GBM dataset contains only 175 tumor samples.
+
+This strong imbalance between the two conditions can introduce bias in downstream analyses.
+
+Therefore, this imbalance must be addressed before proceeding with differential gene expression analysis.
 
 ```{r}
 md_gtex <- as.data.frame(colData(rse_gene_BRAIN))
@@ -130,6 +188,8 @@ ggplot(gtex_counts, aes(x = reorder(Region, -Count), y = Count)) +
        y = "Number of Samples")
 ```
 
+The plot shows that GTEx samples are distributed across different brain regions. Brain cortex is the most represented region, with about 300 samples.
+
 ```{r}
 tcga_site_counts <- as.data.frame(table(md_tcga$tcga.gdc_cases.project.primary_site))
 colnames(tcga_site_counts) <- c("Region", "Count")
@@ -144,13 +204,15 @@ ggplot(tcga_site_counts, aes(x = reorder(Region, -Count), y = Count)) +
 
 ```
 
-The initial dataset was highly unbalanced, with over 3,000 healthy samples (GTEx) compared to approximately 180 tumor samples (TCGA). To ensure a statistically sound comparison and prevent memory issues during processing, we have filtered the GTEx group to include only samples from the Brain - Cortex. This region is the most biologically relevant for comparison with Glioblastoma (GBM). This reduction to roughly 286 healthy samples creates a more balanced experimental design, which optimizes the statistical power of the differential expression analysis and allows for clearer visualization of sample clusters. (cercare fonte paper)
+TCGA GBM samples are not stratified by brain region, preventing a region-specific comparison. For this reason, GTEx healthy samples are filtered to the Brain – Cortex, the most biologically relevant region for Glioblastoma and the most represented region in GTEx. This choice results in a more balanced and biologically consistent comparison.
 
 ```{r}
 rse_gene_BRAIN <- rse_gene_BRAIN[, rse_gene_BRAIN$gtex.smtsd == "Brain - Cortex"]
 ```
 
 # 3. Data Exploration
+
+Since the data were obtained from two different sources, GTEx for healthy samples and TCGA for tumor samples, it is necessary to verify that the two populations are comparable. To this end, we explore key sample-level characteristics that should be broadly similar between the two datasets. In particular, we focus on biological variables (such as age and sex) and technical quality metrics.
 
 ## 3.1. Age distribution
 
@@ -205,6 +267,8 @@ ggplotly(p)
 
 ```
 
+This plot shows the normalized age distribution for GTEx (healthy) and TCGA (tumor). Overall, the two datasets have broadly comparable age ranges, although some bins differ in relative frequency.
+
 ## 3.2. Sex Distribution
 
 ```{r}
@@ -254,6 +318,8 @@ ggplotly(p_sex)
 
 ```
 
+Also in this case, we can observe that both datasets show similar sex proportions.
+
 ## 3.3. RNA Quality
 
 ```{r}
@@ -281,6 +347,8 @@ df_qc_long <- bind_rows(
 
 ```
 
+The metrics used here are RNA-seq quality control measures provided by the recount3 pipeline. The average base quality (`avgq`) represents the mean sequencing quality score across all bases in a sample, with higher values indicating more reliable base calls. The base error rate (`errq`) estimates the frequency of sequencing errors, where lower values correspond to higher sequencing accuracy.
+
 ```{r}
 p_qc_facet <- ggplot(
   df_qc_long,
@@ -307,7 +375,11 @@ ggplotly(p_qc_facet)
 
 ```
 
+While some outliers are present, most samples show acceptable average base quality and error rate values. Overall, the RNA-seq quality of both datasets is suitable for downstream analysis.
+
 # 4. Different Gene Expression Analysis (Bulk RNA-seq)
+
+As a first step in the differential gene expression analysis, we extract gene-level count matrices from the GTEx and TCGA datasets. To ensure comparability between the two sources, we retain only genes that are present in both datasets and build a unified count matrix by combining healthy and tumor samples.
 
 ```{r}
 counts_gtex <- transform_counts(rse_gene_BRAIN)
@@ -325,6 +397,8 @@ count_matrix <- cbind(counts_gtex2, counts_tcga2)
 count_matrix <- as.data.frame(count_matrix)
 head(count_matrix)
 ```
+
+The resulting table represents a gene-by-sample count matrix, where rows correspond to genes (Ensembl IDs) and columns correspond to individual samples from both GTEx and TCGA. Each value indicates the raw expression count of a given gene in a specific sample and constitutes the input for downstream normalization and differential expression testing.
 
 ## 4.1. Quality Control
 
@@ -345,55 +419,44 @@ Where:
 -   The multiplication by \$ 10\^6 \$ scales the expression to "per million" units
 
 ```{r cpm-filter}
-# Obtain CPMs
-CPMs <- cpm(count_matrix)
-# Have a look at the output
-CPMs <- as.data.frame(CPMs)
-head(CPMs)
+
+# Define group labels (healthy vs tumor)
+group <- factor(c(
+  rep("GTEx", ncol(counts_gtex2)),
+  rep("TCGA", ncol(counts_tcga2))
+))
+
+# Create edgeR object
+dge <- DGEList(counts = count_matrix, group = group)
+
+# Compute CPM values 
+CPMs <- cpm(dge)
+head(as.data.frame(CPMs)[, 1:5])
 
 ```
 
 **Filtering lowly expressed genes**
 
-Genes with very low counts across all libraries provide little evidence for differential expression and they interfere with some of the statistical approximations that are used later in the pipeline. They also add to the multiple testing burden when estimating false discovery rates, reducing power to detect differentially expressed genes. These genes should be filtered out prior to further analysis.
+Genes with very low counts across samples provide little evidence for differential expression and increase noise and the multiple-testing burden. For this reason, lowly expressed genes are removed prior to model fitting.
 
-There are a few ways to filter out lowly expressed genes. When there are biological replicates in each group, in this case we have a sample size of 2 in each group, we favour filtering on a minimum counts per million threshold present in at least 2 samples. Two represents the smallest sample size for each group in our experiment. In this dataset, we choose to retain genes if they are expressed at a counts-per-million (CPM) above 0.5 in at least two samples.
+In this analysis, expression filtering is performed using the `filterByExpr()` function from the edgeR package. Rather than applying a fixed CPM threshold, this approach determines whether a gene has sufficient expression to be statistically testable, taking into account library sizes and the experimental group structure (GTEx vs TCGA).
 
-We' ll use the cpm function from the edgeR library (M D Robinson, McCarthy, and Smyth 2010) to generate the CPM values and then filter. Note that by converting to CPMs we are normalising for the different sequencing depths for each sample.
-
-```{r cpm-thresh}
-# Which values in myCPM are greater than 0.5?
-thresh <- CPMs > 0.3
-# This produces a logical matrix with TRUEs and FALSEs
-thresh <- as.data.frame(thresh)
-head(thresh)
-```
+This strategy avoids the removal of condition-specific genes and improves the statistical power and robustness of downstream differential expression analysis.
 
 ```{r cpm-keep}
-# Summary of how many TRUEs there are in each row
-table(rowSums(thresh))
 
+# Filter lowly expressed genes using study design (recommended)
+keep <- filterByExpr(dge, group = group)
 
-# This filter removes genes that are only detected in one sample or not detected at all, ensuring that only genes with evidence of expression in multiple samples are kept for further analysis
-keep <- rowSums(thresh) >= 2
-# Subset the rows of countdata to keep the more highly expressed genes
-counts.keep <- count_matrix[keep,]
-dim(counts.keep)
-```
+# Apply filter and recompute library sizes
+dge <- dge[keep, , keep.lib.sizes = FALSE]
 
-As a general rule, a good threshold can be chosen by identifying the CPM that corresponds to a count of 10, which in this case is about 0.3. You should filter with CPMs rather than filtering on the counts directly, as the latter does not account for differences in library sizes between samples.
-
-Another way in doing so is using the built in function `filterByExpr()` of the edgeR package, however to do so we would need more information such as the design of the study and the division in groups because the function is testing if a gene wil be statistically significant in function of the experiment setup.
-
-```{r cpm-plot}
-# Let's have a look and see whether our threshold of 0.5 does indeed correspond to a count of about 10-15 by Plotting the expression profile of the first sample (First column)
-plot(CPMs[,1],count_matrix[,1],ylim=c(0,20),xlim=c(0,2))
-abline(v=0.3)
-
+dim(dge)
 ```
 
 ```{r}
-counts_filtered <- as.data.frame(counts.keep)
+counts_filtered <- as.data.frame(dge$counts)
+
 head(counts_filtered)
 ```
 
@@ -408,11 +471,6 @@ We apply **TMM** normalization instead of **TPM** because:
 -   **TMM** is for comparing the same gene **between** different samples (Healthy vs. Tumor). It corrects for **composition bias**, ensuring that a few highly expressed genes do not skew the results for the entire library.
 
 ```{r}
-# Create DGEList object
-dgeObj <- DGEList(counts = counts_filtered)
-```
-
-```{r}
 # Calculate TMM normalization factors
 dgeObj <- calcNormFactors(dgeObj, method = "TMM")
 ```
@@ -422,7 +480,26 @@ dgeObj <- calcNormFactors(dgeObj, method = "TMM")
 head(dgeObj$samples)
 ```
 
+The table reports library sizes and TMM normalization factors for each sample. Normalization factors close to 1 indicate that no extreme composition bias is present.
+
+```{r}
+
+barplot(
+  dgeObj$samples$norm.factors,
+  las = 1,
+  col = "darkorange",
+  main = "TMM Normalization Factors per Sample",
+  ylab = "Normalization Factor"
+)
+
+abline(h = 1, col = "red", lty = 2)
+
+
+```
+
 ### 4.1.2. Unsupervised Clustering
+
+To explore the global structure of the data, we perform an unsupervised analysis using PCA. We compute log-transformed CPM values from the filtered and TMM-normalized count matrix, then run PCA on the transposed matrix (samples as observations, genes as features). Finally, we attach sample metadata (dataset, sex, age, and RNA quality) .
 
 ```{r}
 logcounts_all <- cpm(dgeObj, log = TRUE)
@@ -464,6 +541,12 @@ ggplot(pca_df, aes(x = PC1, y = PC2, color = Group)) +
 
 ```
 
+As expected, we observe a clear separation between GTEx and TCGA samples, reflecting the strong transcriptional differences between healthy brain tissue and glioblastoma. This separation arises from widespread changes in gene expression associated with tumor biology, including altered cell proliferation, metabolism, and signaling pathways.
+
+By examining the principal components, we can see that PC1 explains a substantial proportion of the total variance (31.4%) and is markedly more discriminative than PC2.
+
+Having obtained this first unsupervised overview, the next step is to investigate whether additional hidden patterns are present. In particular, we assess whether patient-related variables such as age, sex, or RNA quality metrics contribute to the observed variability or introduce potential confounding effects.
+
 ```{r}
 p_inter <- plot_ly(pca_df, x = ~PC1, y = ~PC2, 
              symbol = ~Group,
@@ -500,6 +583,8 @@ p_inter <- plot_ly(pca_df, x = ~PC1, y = ~PC2,
 
 p_inter
 ```
+
+By exploring the PCA using different coloring schemes, no clear clustering patterns are observed with respect to age, sex, or RNA quality metrics.
 
 ```{r}
 # We estimate the variance for each row in the logcounts matrix
@@ -540,9 +625,11 @@ legend("topright",
        cex = 0.7)
 ```
 
+This heatmap is used to visualize the expression patterns of the most variable genes across samples and to assess whether they reflect the expected biological separation. As expected, the samples cluster according to their condition, with a clear separation between GTEx (healthy) and TCGA (tumor), consistent with the PCA results.
+
+Expression values are shown as row Z-scores: warm colors indicate higher relative expression of a gene in a sample, while cool colors indicate lower relative expression.
+
 ```{r}
-# We estimate the variance for each row in the logcounts matrix
-var_genes <- apply(logcounts_all, 1, var)
 
 # Get the gene names for the top 100 LEAST variable genes (lowest variance)
 select_var_low <- names(sort(var_genes, decreasing = FALSE))[1:100]
@@ -579,11 +666,13 @@ legend("topright",
        cex = 0.7)
 ```
 
+The least variable genes show stable expression and do not separate healthy and tumor samples.
+
 ## 4.2. DE Analysis
 
-**Count the reads for any sample**
+After completing the unsupervised analysis, we now move to differential gene expression (DE) analysis. The objective of this section is to identify genes whose expression levels differ significantly between healthy brain tissue (GTEx) and glioblastoma samples (TCGA), providing insights into the molecular mechanisms underlying the disease.
 
-Here we visualize the library size for every sample
+**Count the reads for any sample**
 
 ```{r}
 idx_gtex <- 1:ncol(counts_gtex2)
@@ -612,6 +701,10 @@ legend("topleft", legend = c("GTEx (Lowest 10)", "TCGA (Lowest 10)"),
 
 
 ```
+
+This plot shows the library size, defined as the total number of reads mapped for each sample. Here, we visualize the samples with the lowest library sizes from GTEx and TCGA to assess potential sequencing depth issues.
+
+All samples display library sizes within an acceptable range, with no extreme low-coverage outliers. This indicates that sequencing depth is sufficient across both datasets and that no samples need to be excluded based on library size prior to differential expression analysis.
 
 ***Plot the distribution of expression for sample***
 
@@ -643,7 +736,11 @@ legend("topright", legend = c("GTEx (Lowest Mean)", "TCGA (Lowest Mean)", "Globa
        lty = c(NA, NA, 2), col = c(NA, NA, "darkgreen"), bty = "n")
 ```
 
+Despite minor differences, the overall log2-CPM distributions are comparable between GTEx and TCGA samples and centered around similar values. This indicates that low library size does not introduce strong biases.
+
 ### 4.2.1. Naive Approach
+
+In this first (naive) approach, we estimate differential expression by comparing GTEx vs TCGA using a simple gene-wise t-test on log2-CPM values. This provides an intuitive baseline to rank genes by statistical significance and effect size, before moving to the edgeR model-based method.
 
 ```{r}
 
@@ -658,6 +755,8 @@ tcga_cols <- which(pca_df$Group == "TCGA")
 
 **Perform a t-test on the groups and optain the p-value**
 
+The p-value quantifies the evidence against the null hypothesis that a gene has equal mean expression in GTEx and TCGA samples.
+
 ```{r}
 p_values <- apply(simple_deg, 1, function(x) {
   t.test(x[gtex_cols], x[tcga_cols])$p.value
@@ -665,6 +764,8 @@ p_values <- apply(simple_deg, 1, function(x) {
 ```
 
 **Calculate foldchange**
+
+Fold change quantifies the magnitude and direction of gene expression differences between conditions, complementing statistical significance with biological relevance.
 
 ```{r}
 log2FC <- rowMeans(simple_deg[, tcga_cols]) - rowMeans(simple_deg[, gtex_cols])
@@ -677,6 +778,8 @@ results_ttest
 ```
 
 **Adjust p-values using Benjamini-Hochberg**
+
+Because thousands of genes are tested, raw p-values must be corrected for multiple testing.
 
 ```{r}
 
@@ -713,43 +816,53 @@ ggplot(results_ttest, aes(x = log2FC, y = -log10(adj_p), color = direction)) +
         legend.position = "bottom")
 ```
 
+In this volcano plot, genes on the right side are up-regulated in GBM, while genes on the left side are down-regulated compared to healthy cortex. Genes located higher in the plot show stronger statistical significance, whereas genes lower in the plot are less significant.
+
+Red and blue points in the upper left and upper right regions represent genes with both large expression changes and strong statistical support. Gray points near the center or bottom indicate genes that do not meet the chosen thresholds for differential expression.
+
 ### 4.2.2. EdgeR Approach
 
 The use of generalized linear models (GLMs) in edgeR allows us to model biological variability (overdispersion) inherent in RNA-seq data, overcoming the limitations of simple t-tests.
 
 **Create a Design Matrix**
 
-The design matrix defines the mathematical framework for the statistical comparison. In our case, we compare the tumor group (TCGA) against the healthy baseline (GTEx).
+We first define the experimental groups (GTEx = healthy baseline, TCGA = tumor) and build a design matrix. The design matrix specifies which comparison will be tested by the GLM.
 
 ```{r}
 
 # 1. Initialize DGEList object
-dgeObj <- DGEList(counts = count_matrix)
+group <- factor(pca_df$Group, levels = c("GTEx", "TCGA"))
+dgeObj <- DGEList(counts = count_matrix, group = group)
 
 # 2. Assign groups and filter lowly expressed genes
-group <- factor(pca_df$Group, levels = c("GTEx", "TCGA"))
-dgeObj$samples$group <- group
-
-keep <- filterByExpr(dgeObj, group = group, min.count = 50, min.prop = 0.4)
+keep <- filterByExpr(dgeObj, group = group)
 dgeObj <- dgeObj[keep, , keep.lib.sizes = FALSE]
+
+cat("Genes before filtering:", nrow(count_matrix), "\n")
+cat("Genes after filtering :", nrow(dgeObj), "\n")
 
 # 3. Normalization and Design Matrix
 dgeObj <- calcNormFactors(dgeObj, method = "TMM")
 design <- model.matrix(~ group)
 colnames(design) <- c("Intercept", "TCGA_vs_GTEx")
 
-# Print the design matrix structure (first few rows)
-print("Design Matrix (Head):")
-print(head(design))
-
-# Print the number of genes remaining after filtering
-print(paste("Number of genes after filtering:", nrow(dgeObj)))
+head(design)
 
 ```
 
+After filtering, approximately 25,000 genes are retained for differential expression analysis. These genes show sufficient expression across samples to allow reliable estimation of dispersion and statistical testing.
+
 **Dispersion Estimation**
 
-Estimating dispersion is a crucial step to distinguish true biological signal from random technical noise.
+RNA-seq count data show greater variability than expected under a simple Poisson model, due to biological differences between samples. Dispersion estimation quantifies this extra variability (overdispersion).
+
+edgeR estimates dispersion at multiple levels:
+
+\- **Common dispersion** captures the overall biological variability shared across all genes.
+
+\- **Trended dispersion** models how variability depends on gene expression level.
+
+\- **Tagwise dispersion** provides gene-specific dispersion estimates, borrowing strength across genes to improve robustness.
 
 ```{r}
 # 1. Estimate Common Dispersion (Usually fast)
@@ -769,7 +882,11 @@ dgeObj <- estimateGLMTagwiseDisp(dgeObj, design)
 plotBCV(dgeObj)
 ```
 
+The BCV (Biological Coefficient of Variation) plot shows the relationship between gene expression level (average log-CPM) and biological variability. Each point represents a gene, while the blue line indicates the trended dispersion and the red line the common dispersion.
+
 **GLM Fitting and Likelihood Ratio Test (LRT)**
+
+After estimating dispersions, we fit a generalized linear model (GLM) to the count data. The GLM models gene expression as a function of the experimental design, incorporating both normalization factors and dispersion estimates.
 
 ```{r}
 # Now that dispersions are estimated, we can fit the model
@@ -778,7 +895,7 @@ lrt <- glmLRT(fit, coef = 2)
 
 # 6. Extract results
 results_edgeR <- as.data.frame(topTags(lrt, n = Inf))
-results_edgeR$is_significant <- results_edgeR$FDR < 0.05 & abs(results_edgeR$logFC) > 1
+results_edgeR$is_significant <- results_edgeR$FDR < 0.001 & abs(results_edgeR$logFC) > 1
 
 head(results_edgeR)
 ```
@@ -789,8 +906,8 @@ results_edgeR <- as.data.frame(topTags(lrt, n = Inf))
 
 # Add significance labels
 results_edgeR$direction <- with(results_edgeR, 
-                                 ifelse(FDR < 0.01 & logFC > 1, "Up Regulated",
-                                 ifelse(FDR < 0.01 & logFC < -1, "Down Regulated", 
+                                 ifelse(FDR < 0.001 & logFC > 1, "Up Regulated",
+                                 ifelse(FDR < 0.001 & logFC < -1, "Down Regulated", 
                                  "Non Significant")))
 
 # Create Volcano Plot
@@ -802,7 +919,7 @@ ggplot(results_edgeR, aes(x = logFC, y = -log10(FDR), color = direction)) +
   theme_minimal() +
   # Add threshold lines
   geom_vline(xintercept = c(-1, 1), linetype = "dashed", alpha = 0.5) +
-  geom_hline(yintercept = -log10(0.01), linetype = "dashed", alpha = 0.5) +
+  geom_hline(yintercept = -log10(0.001), linetype = "dashed", alpha = 0.5) +
   labs(title = "Volcano Plot: TCGA vs GTEx",
        x = "log2 Fold Change",
        y = "-log10 FDR") +
@@ -814,6 +931,7 @@ ggplot(results_edgeR, aes(x = logFC, y = -log10(FDR), color = direction)) +
 ```{r}
 # Convert results to dataframe
 results <- as.data.frame(topTags(lrt, n = Inf))
+head(results)
 
 # Clean Ensembl IDs by removing version suffix
 clean_ids <- gsub("\\..*", "", rownames(results))
@@ -836,6 +954,8 @@ results$GENENAME <- mapIds(org.Hs.eg.db,
 head(results)
 ```
 
+We annotate the edgeR output by mapping Ensembl IDs to gene symbols and gene names. This improves interpretability in downstream plots and biological interpretation.
+
 **Find the gene symbols of the genes tested**
 
 ```{r}
@@ -852,26 +972,30 @@ head(gene_annotations)
 **Overlapping set of DEGs (Upset Plot)**
 
 ```{r}
-# filter the 2 datsets for log2fc and pvalue
-de_ttest <- results_ttest[abs(results_ttest$log2FC) > 1 & results_ttest$adj_p < 0.01, ]
-de_edgeR <- results[abs(results$logFC) > 1 & results$FDR < 0.01, ]
+de_ttest <- results_ttest[results_ttest$adj_p < 0.001 & abs(results_ttest$log2FC) > 1, ]
 genes_ttest <- de_ttest$gene
-genes_edgeR <- rownames(de_edgeR)
-gene_lists <- list("T-test" = genes_ttest, "EdgeR" = genes_edgeR)
 
-# Produce the UpSet plot to visualize consistency
-UpSetR::upset(UpSetR::fromList(gene_lists), 
-              nsets = 2, 
-              order.by = "freq", 
-              main.bar.color = "darkred", 
+de_edgeR_fair <- results[results$FDR < 0.001 & abs(results$logFC) > 1, ]
+genes_edgeR <- rownames(de_edgeR_fair)
+
+gene_lists <- list("T-test" = genes_ttest, "edgeR" = genes_edgeR)
+
+UpSetR::upset(UpSetR::fromList(gene_lists),
+              nsets = 2,
+              order.by = "freq",
+              main.bar.color = "darkred",
               sets.bar.color = "blue")
 
 ```
 
+The UpSet plot shows a substantial overlap between the genes identified as differentially expressed by the naive t-test and by edgeR. The large intersection indicates strong agreement between the two methods, while the method-specific sets highlight genes whose significance depends on the underlying statistical model.
+
+In particular, a large intersection (≈10,000 genes) is detected by both the naive t-test and edgeR, indicating strong agreement in identifying the main transcriptional differences between GBM and healthy cortex.
+
 **Function enrichment analysis on the genes we obtain through edgeR**
 
 ```{r}
-upregulated_edgeR <- rownames(results[results$FDR < 0.05 & results$logFC > 1, ])
+upregulated_edgeR <- rownames(results[results$FDR < 0.001 & results$logFC > 1, ])
 upregulated_clean <- gsub("\\..*", "", upregulated_edgeR)
 
 # Perform GO enrichment analysis
@@ -888,16 +1012,57 @@ ego <- enrichGO(gene          = upregulated_clean,
 dotplot(ego, showCategory=10)     
 ```
 
+The GO enrichment analysis highlights a strong activation of immune-related processes, including leukocyte migration and lymphocyte proliferation, suggesting extensive immune involvement in GBM tissue. Additionally, enrichment of extracellular matrix organization terms indicates tissue remodeling and invasive tumor behavior. Overall, these results reflect hallmark features of glioblastoma biology.
+
 **Visualize same results with the network**
 
+To conclude the functional interpretation, we visualize the enriched GO Biological Process terms as a network. In our case, a standard enrichment map (e.g., `emapplot`) becomes difficult to read due to the high number of terms and connections. For this reason, we use **visNetwork**, which provides an interactive network (zoom, drag, search and hover tooltips), making it easier to explore functional modules and term-to-term relationships.
+
+For more details, see the official documentation: <https://cran.r-project.org/web/packages/visNetwork/vignettes/Introduction-to-visNetwork.html>
+
 ```{r}
-ora_analysis_bp <- pairwise_termsim(ego, method = "JC")
-emapplot(ora_analysis_bp, color = "qvalue")
+
+# --- SETTINGS ---
+n_top <- 40; threshold <- 0.2
+
+# 1. Process Data & Colors
+res <- as.data.frame(ego) %>% top_n(n_top, -p.adjust)
+pal <- colorRampPalette(c("#e41a1c", "#377eb8"))(100)
+res$col <- pal[as.numeric(cut(-log10(res$p.adjust), 100))]
+
+# 2. Nodes & Links
+nodes <- data.frame(id=res$Description, label=res$Description, 
+                    value=res$Count/2, color=res$col,
+                    title = paste0("<b>Term:</b> ", res$Description, "<br>",
+                                   "<b>p.adj:</b> ", formatC(res$p.adjust, format="e", 2), "<br>",
+                                   "<b>Count:</b> ", res$Count))
+
+sim <- ora_analysis_bp@termsim[nodes$id, nodes$id]
+links <- data.frame(which(sim > threshold & lower.tri(sim), arr.ind=T)) %>%
+  rename(from=row, to=col) %>%
+  mutate(from=rownames(sim)[from], to=colnames(sim)[to], width=sim[cbind(from,to)]*2)
+
+# 3. Plot
+visNetwork(nodes, links, main="GO Interaction Map") %>%
+  visNodes(font=list(size=25, strokeWidth=5, strokeColor="white")) %>%
+  visEdges(color=list(color="grey", opacity=0.2)) %>%
+  visOptions(highlightNearest=T, nodesIdSelection=list(enabled=T, values=nodes$id)) %>%
+  visPhysics(solver="forceAtlas2Based", forceAtlas2Based=list(gravitationalConstant=-150))
 ```
+
+The interactive GO interaction network reveals that enriched biological processes cluster into a few major functional modules, indicating coordinated biological programs altered in GBM.
+
+The first major module is related to **immune cell migration and chemotaxis**, including leukocyte migration, granulocyte migration, and cell chemotaxis. This cluster highlights strong immune cell recruitment and infiltration in the tumor microenvironment, a known feature of glioblastoma.
+
+A second prominent module involves **immune cell proliferation and differentiation**, particularly T cell, lymphocyte, and mononuclear cell proliferation. This suggests active regulation of immune cell expansion and differentiation, reflecting an inflamed and immunologically dynamic tumor context.
+
+The third functional module is associated with **cell cycle and chromosome segregation**, including mitotic nuclear division and sister chromatid segregation. This cluster reflects increased proliferative activity and dysregulated cell division, which are hallmarks of aggressive tumor growth.
+
+Overall, the network representation highlights how immune-related processes and tumor-intrinsic proliferative programs are tightly interconnected in GBM, providing a systems-level view of the biological mechanisms underlying the observed differential gene expression.
 
 # 5. Protein-Protein Interaction (PPI) Network analysis
 
-### 5.1 Seed Selection
+### 5.1 Seed Selection 
 
 Genes do not act in isolation, but their protein products interact in complex networks to carry out cellular functions. Differential gene expression analysis identifies genes associated with the disease condition, but does not provide information on how these genes interact at the protein level.
 
@@ -934,7 +1099,7 @@ deg_genes_clean <- sub("\\..*$", "", deg_genes)
 head(deg_genes_clean)
 ```
 
-### 5.2 ID processing 
+### 5.2 ID processing
 
 Gene identifiers were originally annotated using Ensembl IDs including version numbers. Version information was removed to ensure compatibility with downstream annotation databases.
 
@@ -1017,7 +1182,6 @@ plot(
   vertex.color = "steelblue",
   main = "Subnetwork of top hub proteins"
 )
-
 ```
 
 To improve interpretability, a subnetwork composed of the most highly connected proteins was extracted from the full PPI network. This visualization highlights a densely interconnected core of hub proteins, suggesting the presence of central functional modules within the disease-associated network.
@@ -1032,12 +1196,12 @@ avg_degree
 
 The PPI network shows a low overall density, as expected for biological interaction networks, with an average node degree consistent with the presence of highly connected hub proteins.
 
+### 5.4 Network topology analysis 
+
 ```{r}
 deg <- degree(ppi_graph)
 bet <- betweenness(ppi_graph)
 ```
-
-### 5.4 Network topology analysis
 
 ```{r}
 deg_df <- data.frame(degree = deg)
