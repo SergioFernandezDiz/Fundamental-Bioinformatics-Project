@@ -897,7 +897,7 @@ emapplot(ora_analysis_bp, color = "qvalue")
 
 # 5. Protein-Protein Interaction (PPI) Network analysis
 
-### Rationale
+### 5.1 Seed Selection
 
 Genes do not act in isolation, but their protein products interact in complex networks to carry out cellular functions. Differential gene expression analysis identifies genes associated with the disease condition, but does not provide information on how these genes interact at the protein level.
 
@@ -927,12 +927,14 @@ head(deg_genes)
 
 ```
 
-Differentially expressed genes were selected using an edgeR-based analysis, applying a false discovery rate (FDR) threshold of 0.05 and an absolute log2 fold change greater than 1.
+Differentially expressed genes were selected using an edgeR-based analysis, applying a false discovery rate (FDR) threshold of 0.05 and an absolute log2 fold change greater than 1 , in order to focus the PPI network analysis on biologically relevant genes
 
 ```{r}
 deg_genes_clean <- sub("\\..*$", "", deg_genes)
 head(deg_genes_clean)
 ```
+
+### 5.2 ID processing 
 
 Gene identifiers were originally annotated using Ensembl IDs including version numbers. Version information was removed to ensure compatibility with downstream annotation databases.
 
@@ -955,7 +957,7 @@ length(deg_symbols)
 head(deg_symbols)
 ```
 
-Ensembl gene identifiers were converted to gene symbols prior to PPI network construction. Genes that could not be mapped were excluded from downstream analyses.
+Since differential expression analysis is gene-based while protein–protein interaction networks operate at the protein level, Ensembl gene identifiers were cleaned and converted to gene symbols to ensure correct mapping and biological interpretation.
 
 ```{r}
 string_db <- STRINGdb$new(
@@ -977,7 +979,9 @@ nrow(mapped_genes)
 head(mapped_genes)
 ```
 
-### PPI Construction
+We restricted the analysis to high-confidence protein–protein interactions to reduce false positives and we have obtained a list of human proteins, derived from DEGs, mapped to STRING
+
+### 5.3 PPI Construction
 
 ```{r}
 ppi_edges <- string_db$get_interactions(mapped_genes$STRING_id)
@@ -999,12 +1003,41 @@ plot(
 )
 ```
 
-The resulting PPI network is represented as an undirected graph, where nodes correspond to proteins and edges represent protein–protein interactions.
+The complete PPI network is shown to illustrate the overall connectivity structure. Due to network size, individual nodes are not labeled, and subsequent analyses focus on topological and functional properties
+
+```{r}
+top_nodes <- names(sort(deg, decreasing = TRUE)[1:100])
+sub_ppi <- induced_subgraph(ppi_graph, top_nodes)
+
+plot(
+  sub_ppi,
+  vertex.label = NA,
+  vertex.size = 5,
+  edge.color = "grey80",
+  vertex.color = "steelblue",
+  main = "Subnetwork of top hub proteins"
+)
+
+```
+
+To improve interpretability, a subnetwork composed of the most highly connected proteins was extracted from the full PPI network. This visualization highlights a densely interconnected core of hub proteins, suggesting the presence of central functional modules within the disease-associated network.
+
+```{r}
+network_density <- edge_density(ppi_graph)
+avg_degree <- mean(deg)
+
+network_density
+avg_degree
+```
+
+The PPI network shows a low overall density, as expected for biological interaction networks, with an average node degree consistent with the presence of highly connected hub proteins.
 
 ```{r}
 deg <- degree(ppi_graph)
 bet <- betweenness(ppi_graph)
 ```
+
+### 5.4 Network topology analysis
 
 ```{r}
 deg_df <- data.frame(degree = deg)
@@ -1021,7 +1054,7 @@ ggplot(deg_df, aes(x = degree)) +
 
 ```
 
-The right-skewed degree distribution indicates a scale-free topology, a common property of biological interaction networks characterized by the presence of highly connected hub proteins.
+The degree distribution of the PPI network is highly right-skewed, indicating a scale-free topology characterized by a small number of highly connected hub proteins and many low-degree nodes, which is a typical feature of biological networks
 
 ```{r}
 top_hubs <- sort(deg, decreasing = TRUE)[1:10]
@@ -1050,6 +1083,8 @@ ggplot(centrality_df, aes(x = degree, y = betweenness)) +
 
 While hub proteins are characterized by a high number of interactions, proteins with high betweenness centrality act as connectors between different regions of the network and may coordinate distinct functional modules.
 
+### 5.5 Community detection
+
 ```{r}
 communities <- cluster_louvain(ppi_graph)
 
@@ -1062,6 +1097,22 @@ plot(
 )
 
 ```
+
+Community detection was performed using the Louvain algorithm, a modularity-based method designed for large-scale networks. In biological interaction networks, this approach allows the identification of functional modules, which are thought to represent disease-associated subnetworks according to the principles of network medicine [Blondel et al., 2008; Barabási et al., 2011].
+
+The different colors indicate different identified communities, so the network is not a random cluster but rather groups of proteins connected to each other, captured mainly by a nucleus interconnected with other smaller peripheral groups.
+
+```{r}
+components_ppi <- components(ppi_graph)
+
+table(components_ppi$csize)[1:5]
+largest_comp_size <- max(components_ppi$csize)
+largest_comp_size
+```
+
+Most proteins in the PPI network belong to a single large connected component, suggesting the presence of a coherent disease-associated module rather than isolated interactions.
+
+### 5.6 Functional Enrichment
 
 ```{r}
 
@@ -1083,43 +1134,6 @@ dotplot(kegg_enrich, showCategory = 10)
 ```
 
 Functional enrichment analysis of the PPI network revealed significant over-representation of signaling pathways related to cell communication, calcium signaling, and extracellular matrix interactions. Although some KEGG pathways are annotated as neuronal, they include general signaling components such as receptors and ion channels that are also active in non-neuronal tissues, including cancer. Overall, these results support the biological relevance of the identified PPI network and highlight dysregulated signaling processes associated with the disease.
-
-```{r}
-components_ppi <- components(ppi_graph)
-
-table(components_ppi$csize)[1:5]
-largest_comp_size <- max(components_ppi$csize)
-largest_comp_size
-
-
-```
-
-Most proteins in the PPI network belong to a single large connected component, suggesting the presence of a coherent disease-associated module rather than isolated interactions.
-
-```{r}
-network_density <- edge_density(ppi_graph)
-avg_degree <- mean(deg)
-
-network_density
-avg_degree
-```
-
-```{r}
-distances_lcc <- igraph::distances(lcc)
-
-dist_df <- as.data.frame.table(distances_lcc, responseName = "distance")
-dist_df <- dist_df[is.finite(dist_df$distance), , drop = FALSE]
-
-ggplot2::ggplot(dist_df, ggplot2::aes(x = distance)) +
-  ggplot2::geom_histogram(bins = 30, fill = "steelblue", color = "black") +
-  ggplot2::theme_minimal() +
-  ggplot2::labs(
-    title = "Shortest path length distribution",
-    x = "Shortest path length",
-    y = "Frequency"
-  )
-
-```
 
 ## 6. Single-Cell RNA-seq Analysis
 
