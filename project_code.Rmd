@@ -11,10 +11,46 @@ output:
 # Imports and packages
 
 ```{r}
-BiocManager::install("recount3")
-BiocManager::install("org.Hs.eg.db")
-install.packages("tidyverse")
-install.packages("pheatmap")
+# Install BiocManager (once)
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager")
+}
+
+# Helper installers
+install_cran_if_missing <- function(pkgs) {
+  pkgs <- unique(pkgs)
+  to_install <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
+  if (length(to_install) > 0) install.packages(to_install, dependencies = TRUE)
+  invisible(to_install)
+}
+
+install_bioc_if_missing <- function(pkgs) {
+  pkgs <- unique(pkgs)
+  to_install <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
+  if (length(to_install) > 0) BiocManager::install(to_install, ask = FALSE, update = FALSE)
+  invisible(to_install)
+}
+
+# CRAN packages
+install_cran_if_missing(c(
+  "tidyverse",
+  "pheatmap",
+  "Seurat",
+  "SeuratData"
+  "visNetwork"
+))
+
+# Bioconductor packages
+install_bioc_if_missing(c(
+  "recount3",
+  "org.Hs.eg.db",
+  "ggtree",
+  "clusterProfiler",
+  "scRNAseq",
+  "SingleCellExperiment",
+  "SingleR",
+  "celldex"
+))
 ```
 
 ```{r}
@@ -33,6 +69,16 @@ library(AnnotationDbi)
 library(clusterProfiler)
 library(org.Hs.eg.db) 
 library(enrichplot)
+install.packages("visNetwork")
+library(visNetwork)
+
+# Load libraries
+library(scRNAseq)
+library(Seurat)
+library(SingleCellExperiment)
+library(SingleR)
+library(celldex)
+
 ```
 
 # 1. Project Introduction
@@ -430,7 +476,7 @@ group <- factor(c(
 dge <- DGEList(counts = count_matrix, group = group)
 
 # Compute CPM values 
-CPMs <- cpm(dge)
+CPMs <- edgeR::cpm(dge)
 head(as.data.frame(CPMs)[, 1:5])
 
 ```
@@ -472,12 +518,12 @@ We apply **TMM** normalization instead of **TPM** because:
 
 ```{r}
 # Calculate TMM normalization factors
-dgeObj <- calcNormFactors(dgeObj, method = "TMM")
+dge <- calcNormFactors(dge, method = "TMM")
 ```
 
 ```{r}
 # Check normalization factors (should be around 1)
-head(dgeObj$samples)
+head(dge$samples)
 ```
 
 The table reports library sizes and TMM normalization factors for each sample. Normalization factors close to 1 indicate that no extreme composition bias is present.
@@ -485,7 +531,7 @@ The table reports library sizes and TMM normalization factors for each sample. N
 ```{r}
 
 barplot(
-  dgeObj$samples$norm.factors,
+  dge$samples$norm.factors,
   las = 1,
   col = "darkorange",
   main = "TMM Normalization Factors per Sample",
@@ -502,7 +548,7 @@ abline(h = 1, col = "red", lty = 2)
 To explore the global structure of the data, we perform an unsupervised analysis using PCA. We compute log-transformed CPM values from the filtered and TMM-normalized count matrix, then run PCA on the transposed matrix (samples as observations, genes as features). Finally, we attach sample metadata (dataset, sex, age, and RNA quality) .
 
 ```{r}
-logcounts_all <- cpm(dgeObj, log = TRUE)
+logcounts_all <- edgeR::cpm(dge, log = TRUE)
 pca_res <- prcomp(t(logcounts_all), scale. = TRUE)
 pca_df <- as.data.frame(pca_res$x)
 
@@ -678,12 +724,12 @@ After completing the unsupervised analysis, we now move to differential gene exp
 idx_gtex <- 1:ncol(counts_gtex2)
 idx_tcga <- (ncol(counts_gtex2) + 1):(ncol(counts_gtex2) + ncol(counts_tcga2))
 
-lib_sizes_gtex <- dgeObj$samples$lib.size[idx_gtex]
-names(lib_sizes_gtex) <- colnames(dgeObj)[idx_gtex]
+lib_sizes_gtex <- dge$samples$lib.size[idx_gtex]
+names(lib_sizes_gtex) <- colnames(dge)[idx_gtex]
 low_10_gtex <- sort(lib_sizes_gtex)[1:10]
 
-lib_sizes_tcga <- dgeObj$samples$lib.size[idx_tcga]
-names(lib_sizes_tcga) <- colnames(dgeObj)[idx_tcga]
+lib_sizes_tcga <- dge$samples$lib.size[idx_tcga]
+names(lib_sizes_tcga) <- colnames(dge)[idx_tcga]
 low_10_tcga <- sort(lib_sizes_tcga)[1:10]
 
 low_20_total <- c(low_10_gtex, low_10_tcga)
@@ -717,7 +763,7 @@ idx_tcga <- (ncol(counts_gtex2) + 1):(ncol(counts_gtex2) + ncol(counts_tcga2))
 low_10_gtex_names <- names(sort(sample_means[idx_gtex])[1:10])
 low_10_tcga_names <- names(sort(sample_means[idx_tcga])[1:10])
 
-logcounts <- cpm(count_matrix, log=TRUE)
+logcounts <- edgeR::cpm(count_matrix, log=TRUE)
 sub_logcounts <- logcounts[, c(low_10_gtex_names, low_10_tcga_names)]
 ```
 
@@ -832,17 +878,17 @@ We first define the experimental groups (GTEx = healthy baseline, TCGA = tumor) 
 
 # 1. Initialize DGEList object
 group <- factor(pca_df$Group, levels = c("GTEx", "TCGA"))
-dgeObj <- DGEList(counts = count_matrix, group = group)
+dge <- DGEList(counts = count_matrix, group = group)
 
 # 2. Assign groups and filter lowly expressed genes
-keep <- filterByExpr(dgeObj, group = group)
-dgeObj <- dgeObj[keep, , keep.lib.sizes = FALSE]
+keep <- filterByExpr(dge, group = group)
+dge <- dge[keep, , keep.lib.sizes = FALSE]
 
 cat("Genes before filtering:", nrow(count_matrix), "\n")
-cat("Genes after filtering :", nrow(dgeObj), "\n")
+cat("Genes after filtering :", nrow(dge), "\n")
 
 # 3. Normalization and Design Matrix
-dgeObj <- calcNormFactors(dgeObj, method = "TMM")
+dge <- calcNormFactors(dge, method = "TMM")
 design <- model.matrix(~ group)
 colnames(design) <- c("Intercept", "TCGA_vs_GTEx")
 
@@ -867,19 +913,19 @@ edgeR estimates dispersion at multiple levels:
 ```{r}
 # 1. Estimate Common Dispersion (Usually fast)
 print("Estimating common dispersion...")
-dgeObj <- estimateCommonDisp(dgeObj, design)
+dge <- estimateCommonDisp(dge, design)
 
 # 2. Estimate Trended Dispersion (This is what usually takes time)
 print("Estimating trended dispersion...")
-dgeObj <- estimateGLMTrendedDisp(dgeObj, design)
+dge <- estimateGLMTrendedDisp(dge, design)
 
 # 3. Estimate Tagwise Dispersion (Final step)
 print("Estimating tagwise dispersion...")
-dgeObj <- estimateGLMTagwiseDisp(dgeObj, design)
+dge <- estimateGLMTagwiseDisp(dge, design)
 
 
 # Visualize the BCV
-plotBCV(dgeObj)
+plotBCV(dge)
 ```
 
 The BCV (Biological Coefficient of Variation) plot shows the relationship between gene expression level (average log-CPM) and biological variability. Each point represents a gene, while the blue line indicates the trended dispersion and the red line the common dispersion.
@@ -890,7 +936,7 @@ After estimating dispersions, we fit a generalized linear model (GLM) to the cou
 
 ```{r}
 # Now that dispersions are estimated, we can fit the model
-fit <- glmFit(dgeObj, design)
+fit <- glmFit(dge, design)
 lrt <- glmLRT(fit, coef = 2)
 
 # 6. Extract results
@@ -961,7 +1007,7 @@ We annotate the edgeR output by mapping Ensembl IDs to gene symbols and gene nam
 ```{r}
 # Map IDs to gene names (SYMBOL and GENENAME) for all tested genes
 gene_annotations <- AnnotationDbi::select(org.Hs.eg.db, 
-                                          keys = gsub("\\..*", "", rownames(dgeObj)), 
+                                          keys = gsub("\\..*", "", rownames(dge)), 
                                           columns = c("SYMBOL", "GENENAME"), 
                                           keytype = "ENSEMBL")
 
@@ -1021,7 +1067,6 @@ To conclude the functional interpretation, we visualize the enriched GO Biologic
 For more details, see the official documentation: <https://cran.r-project.org/web/packages/visNetwork/vignettes/Introduction-to-visNetwork.html>
 
 ```{r}
-
 # --- SETTINGS ---
 n_top <- 40; threshold <- 0.2
 
@@ -1030,6 +1075,9 @@ res <- as.data.frame(ego) %>% top_n(n_top, -p.adjust)
 pal <- colorRampPalette(c("#e41a1c", "#377eb8"))(100)
 res$col <- pal[as.numeric(cut(-log10(res$p.adjust), 100))]
 
+# 2. Compute term similarity BEFORE accessing it
+ego <- pairwise_termsim(ego)
+
 # 2. Nodes & Links
 nodes <- data.frame(id=res$Description, label=res$Description, 
                     value=res$Count/2, color=res$col,
@@ -1037,7 +1085,7 @@ nodes <- data.frame(id=res$Description, label=res$Description,
                                    "<b>p.adj:</b> ", formatC(res$p.adjust, format="e", 2), "<br>",
                                    "<b>Count:</b> ", res$Count))
 
-sim <- ora_analysis_bp@termsim[nodes$id, nodes$id]
+sim <- ego@termsim[nodes$id, nodes$id]
 links <- data.frame(which(sim > threshold & lower.tri(sim), arr.ind=T)) %>%
   rename(from=row, to=col) %>%
   mutate(from=rownames(sim)[from], to=colnames(sim)[to], width=sim[cbind(from,to)]*2)
@@ -1062,7 +1110,7 @@ Overall, the network representation highlights how immune-related processes and 
 
 # 5. Protein-Protein Interaction (PPI) Network analysis
 
-### 5.1 Seed Selection 
+## 5.1 Seed Selection
 
 Genes do not act in isolation, but their protein products interact in complex networks to carry out cellular functions. Differential gene expression analysis identifies genes associated with the disease condition, but does not provide information on how these genes interact at the protein level.
 
@@ -1099,7 +1147,7 @@ deg_genes_clean <- sub("\\..*$", "", deg_genes)
 head(deg_genes_clean)
 ```
 
-### 5.2 ID processing
+## 5.2 ID processing
 
 Gene identifiers were originally annotated using Ensembl IDs including version numbers. Version information was removed to ensure compatibility with downstream annotation databases.
 
@@ -1146,7 +1194,7 @@ head(mapped_genes)
 
 We restricted the analysis to high-confidence protein–protein interactions to reduce false positives and we have obtained a list of human proteins, derived from DEGs, mapped to STRING
 
-### 5.3 PPI Construction
+## 5.3 PPI Construction
 
 ```{r}
 ppi_edges <- string_db$get_interactions(mapped_genes$STRING_id)
@@ -1171,6 +1219,8 @@ plot(
 The complete PPI network is shown to illustrate the overall connectivity structure. Due to network size, individual nodes are not labeled, and subsequent analyses focus on topological and functional properties
 
 ```{r}
+deg <- degree(ppi_graph)
+
 top_nodes <- names(sort(deg, decreasing = TRUE)[1:100])
 sub_ppi <- induced_subgraph(ppi_graph, top_nodes)
 
@@ -1196,7 +1246,7 @@ avg_degree
 
 The PPI network shows a low overall density, as expected for biological interaction networks, with an average node degree consistent with the presence of highly connected hub proteins.
 
-### 5.4 Network topology analysis 
+## 5.4 Network topology analysis
 
 ```{r}
 deg <- degree(ppi_graph)
@@ -1247,7 +1297,7 @@ ggplot(centrality_df, aes(x = degree, y = betweenness)) +
 
 While hub proteins are characterized by a high number of interactions, proteins with high betweenness centrality act as connectors between different regions of the network and may coordinate distinct functional modules.
 
-### 5.5 Community detection
+## 5.5 Community detection
 
 ```{r}
 communities <- cluster_louvain(ppi_graph)
@@ -1276,7 +1326,7 @@ largest_comp_size
 
 Most proteins in the PPI network belong to a single large connected component, suggesting the presence of a coherent disease-associated module rather than isolated interactions.
 
-### 5.6 Functional Enrichment
+## 5.6 Functional Enrichment
 
 ```{r}
 
@@ -1299,16 +1349,33 @@ dotplot(kegg_enrich, showCategory = 10)
 
 Functional enrichment analysis of the PPI network revealed significant over-representation of signaling pathways related to cell communication, calcium signaling, and extracellular matrix interactions. Although some KEGG pathways are annotated as neuronal, they include general signaling components such as receptors and ion channels that are also active in non-neuronal tissues, including cancer. Overall, these results support the biological relevance of the identified PPI network and highlight dysregulated signaling processes associated with the disease.
 
-## 6. Single-Cell RNA-seq Analysis
+# 6. Single-Cell RNA-seq Analysis
 
-### 6.1. Introduction and Data Loading
+## 6.1. Introduction and Data Loading
 
 To complement our bulk RNA-seq analysis comparing healthy brain cortex (GTEx) with glioblastoma (TCGA), we now perform single-cell RNA-seq analysis. This allows us to:
 
 -   Identify specific cell types present in brain cortex tissue
 -   Examine cell-type-specific expression patterns
--   Validate bulk RNA-seq findings at cellular resolution
--   Discover heterogeneous cell populations in the brain
+-   Provide cellular context for the bulk RNA-seq findings
+-   Discover heterogeneous cell populations in cortex tissue
+
+**Rationale for using mouse cortex data:**
+
+We initially selected the "hu-cortex-2017" dataset from the scRNAseq Bioconductor package, assuming it contained human cortex data based on the dataset name. However, after downloading and analyzing the data, we discovered that this is actually a **mouse cortex dataset** (the "hu" prefix is misleading).
+
+Despite this species mismatch with our human bulk RNA-seq analysis (GTEx and TCGA-GBM), we proceeded with the mouse scRNA-seq analysis for the following reasons:
+
+1. **Educational value**: This analysis demonstrates the complete single-cell RNA-seq workflow, including quality control, normalization, dimensionality reduction, clustering, and cell type annotation.
+
+2. **Cell type characterization**: Understanding the cellular composition of cortex tissue—even from mouse—provides important biological context. The major cell types in cortex (neurons, astrocytes, oligodendrocytes, microglia, endothelial cells) are conserved between mouse and human.
+
+3. **Limited human alternatives**: After this discovery, we found that high-quality, publicly available human cortex scRNA-seq datasets are not available in the scRNAseq repository.
+
+4. **Methodological demonstration**: The computational methods and analytical pipeline demonstrated here are directly applicable to human single-cell data when available.
+
+While ideally we would use human scRNA-seq data to match our bulk RNA-seq analysis, this cross-species approach still provides valuable insights into cortical cellular heterogeneity and demonstrates competency in single-cell data analysis techniques.
+
 
 ```{r}
 # Bioconductor packages
@@ -1332,14 +1399,14 @@ library(SingleCellExperiment)
 
 ```
 
+We begin by searching the scRNAseq package for available cortex datasets.
+
 ```{r}
 # Search for cortex-related datasets
 brain_datasets <- searchDatasets("cortex")
 cat("Brain/Cortex datasets available:\n")
 print(brain_datasets[, c("name", "title", "version", "path", "description")])
 ```
-
-We select the human cortex dataset (hu-cortex-2017) which provides single-nucleus RNA-seq data from human cortex, matching the tissue type used in our bulk RNA-seq analysis (GTEx Brain - Cortex).
 
 ```{r}
 # Check available paths for this dataset
@@ -1357,15 +1424,14 @@ print(available_paths)
 path = "cortex"
 cortex_sc <- fetchDataset(name,version,path)
 cortex_sc
-
-# Display dataset information
-cat("\n=== Dataset Loaded Successfully ===\n")
-print(cortex_sc)
-cat("\nNumber of genes:", nrow(cortex_sc), "\n")
-cat("Number of cells:", ncol(cortex_sc), "\n")
 ```
+The dataset is loaded as a SingleCellExperiment object containing gene expression counts for individual cells.
 
-### 6.2. Data Preparation and Quality Control
+
+## 6.2. Data Preparation and Quality Control
+
+Before analysis, we need to check the quality of our cells and remove low-quality ones. Poor quality cells can arise from dead or dying cells, doublets (two cells captured together), or technical artifacts.
+
 
 ```{r}
 # View available metadata columns
@@ -1398,6 +1464,7 @@ print(cortex_sc)
 cat("\nNumber of genes:", nrow(cortex_sc), "\n")
 cat("Number of cells:", ncol(cortex_sc), "\n")
 ```
+
 
 **Objective:** The scRNA-seq dataset was downloaded as a SingleCellExperiment object. Before performing downstream single-cell analysis (normalization, dimensionality reduction, clustering), the data must be converted into a Seurat object, which requires:
 
@@ -1458,6 +1525,7 @@ so <- CreateSeuratObject(
 so
 
 ```
+The Seurat object is now created and ready for analysis. It stores the count matrix along with metadata for each cell.
 
 ```{r}
 meta <- as.data.frame(colData(cortex_sc))
@@ -1471,12 +1539,17 @@ head(so@meta.data)
 ```
 
 ```{r}
+head(rownames(so))
+```
+
+```{r}
 # Calculate percentage of mitochondrial genes
-so[["percent.mt"]] <- PercentageFeatureSet(so, pattern = "^MT-")
+so[["percent.mt"]] <- PercentageFeatureSet(so, pattern = "^mt-")
 
 # View updated metadata
 head(so@meta.data)
 ```
+High mitochondrial gene percentage often indicates dying cells, as damaged cells leak cytoplasmic RNA while retaining mitochondrial RNA.
 
 ```{r}
 # Violin plots for quality control metrics
@@ -1492,6 +1565,8 @@ FeatureScatter(so, feature1 = "nCount_RNA", feature2 = "nFeature_RNA") +
 # Scatter plot for mitochondrial content vs gene count
 FeatureScatter(so, feature1 = "nCount_RNA", feature2 = "percent.mt") +
   geom_smooth(method = "lm")
+
+
 ```
 
 ```{r}
@@ -1506,7 +1581,9 @@ cat("Genes:", nrow(so), "\n")
 
 ```
 
-### 6.3. Normalization and Feature Selection
+After filtering, we retain only high-quality cells for downstream analysis. Cells with too few or too many detected genes, or high mitochondrial content, have been removed.
+
+## 6.3. Normalization and Feature Selection
 
 Normalize the raw gene expression data to enable meaningful comparison between cells. The `NormalizeData()` function applies log-normalization:
 
@@ -1540,12 +1617,17 @@ cat("Top 10 most variable genes:\n")
 print(top10_var)
 ```
 
+We select 2,000 highly variable genes for downstream analysis. These genes show the most variation across cells and are most useful for distinguishing different cell types.
+
 ```{r}
 # Plot variable features
 plot1 <- VariableFeaturePlot(so)
 plot2 <- LabelPoints(plot = plot1, points = top10_var, repel = TRUE)
 plot2
 ```
+
+This plot shows how much each gene varies across cells compared to its average expression level. Genes shown in red are the most variable and were selected for further analysis, while genes in black show little variation and were not used. Many of the selected genes are known markers of different cell
+
 
 Scaling standardizes gene expression values by centering (subtracting the mean) and scaling (dividing by standard deviation). This ensures that highly expressed genes do not dominate downstream analyses.
 
@@ -1558,7 +1640,7 @@ cat("Scaling complete.\n")
 cat("Scaled data dimensions:", dim(so[["RNA"]]$scale.data), "\n")
 ```
 
-### 6.4. Dimensionality Reduction (PCA)
+## 6.4. Dimensionality Reduction (PCA)
 
 Principal Component Analysis (PCA) reduces the dimensionality of the data while preserving the most important sources of variation.
 
@@ -1575,26 +1657,36 @@ print(so[["pca"]], dims = 1:5, nfeatures = 5)
 VizDimLoadings(so, dims = 1:2, reduction = "pca")
 ```
 
+This plot shows the genes that contribute most to the first two principal components (PC1 and PC2). These genes are the main drivers of variation in the dataset and help explain the differences between cells observed in the PCA.
+
+Mal, Mag, and Mog contribute strongly to both PC1 and PC2, suggesting that differences related to these genes play an important role in separating cells in the PCA.
+
+
+
 ```{r}
 # PCA plot
 DimPlot(so, reduction = "pca")
 ```
 
+The PCA plot shows that the cells are largely similar, with gradual variation rather than clearly separated groups
+
 ```{r}
+print(so[["pca"]], dims = 1:5, nfeatures = 5)
 # Heatmap of top genes in first principal component
 DimHeatmap(so, dims = 1, cells = 500, balanced = TRUE)
 ```
-
-The elbow plot helps determine how many principal components capture meaningful biological signal.
 
 ```{r}
 # Elbow plot to determine optimal number of PCs
 ElbowPlot(so, ndims = 30)
 ```
 
-Based on the elbow plot, we select the number of PCs where the curve starts to flatten. Typically 10-20 PCs capture most biological variation.
 
-### 6.5. Clustering and UMAP Visualization
+The elbow plot shows the variance explained by each PC. We look for the "elbow" point where adding more PCs provides diminishing returns. 
+
+Based on the elbow plot, we select 15 PCs for downstream analysis (clustering and UMAP), as the variance explained drops substantially after this point
+
+## 6.5. Clustering and UMAP Visualization
 
 Construct a shared nearest neighbor (SNN) graph to identify similar cells.
 
@@ -1612,6 +1704,7 @@ so <- FindClusters(so, resolution = c(0.1, 0.3, 0.5, 0.8, 1.0))
 # View clustering results in metadata
 head(so@meta.data)
 ```
+he resolution parameter controls how many clusters are identified. Lower resolution gives fewer, broader clusters; higher resolution gives more, finer clusters. We test multiple values to find the best balance:
 
 ```{r}
 # Compare different resolutions
@@ -1623,17 +1716,10 @@ cat("Resolution 0.8:", length(unique(so$RNA_snn_res.0.8)), "clusters\n")
 cat("Resolution 1.0:", length(unique(so$RNA_snn_res.1)), "clusters\n")
 ```
 
-Choose an appropriate resolution for downstream analysis.
-
 ```{r}
-# Set identity to resolution 0.5 (adjust based on your data)
-Idents(so) <- "RNA_snn_res.0.5"
+DimPlot(so, reduction = "pca", group.by = "RNA_snn_res.0.1", label = TRUE)
 
-cat("Active identity set to resolution 0.5\n")
-cat("Number of clusters:", length(unique(Idents(so))), "\n")
 ```
-
-UMAP provides a 2D visualization that preserves local and global structure of the data.
 
 ```{r}
 # Run UMAP
@@ -1641,26 +1727,47 @@ so <- RunUMAP(so, dims = 1:15)
 ```
 
 ```{r}
-# UMAP plot colored by cluster
-DimPlot(so, reduction = "umap", label = TRUE, pt.size = 0.5) +
-  ggtitle("UMAP - Clusters (Resolution 0.5)")
-```
-
-```{r}
 # Compare clustering at different resolutions
 p1 <- DimPlot(so, reduction = "umap", group.by = "RNA_snn_res.0.1", label = TRUE) + 
   ggtitle("Resolution 0.1")
-p2 <- DimPlot(so, reduction = "umap", group.by = "RNA_snn_res.0.5", label = TRUE) + 
+p2 <- DimPlot(so, reduction = "umap", group.by = "RNA_snn_res.0.3", label = TRUE) + 
+  ggtitle("Resolution 0.3")
+p3 <- DimPlot(so, reduction = "umap", group.by = "RNA_snn_res.0.5", label = TRUE) + 
   ggtitle("Resolution 0.5")
-p3 <- DimPlot(so, reduction = "umap", group.by = "RNA_snn_res.1", label = TRUE) + 
-  ggtitle("Resolution 1.0")
 
 p1 + p2 + p3
 ```
+Comparing different resolutions helps us choose the appropriate level of granularity. Lower resolutions merge similar cell types, while higher resolutions may split biological cell types into multiple clusters. 
+we think that 0.3 it's a good resolution
 
-### 6.6. Cell Type Annotation
+```{r}
+# Set identity to resolution 0.3 
+Idents(so) <- "RNA_snn_res.0.3"
 
-Identify marker genes that define each cluster. These genes are differentially expressed in one cluster compared to all others.
+cat("Active identity set to resolution 0.3\n")
+cat("Number of clusters:", length(unique(Idents(so))), "\n")
+```
+
+```{r}
+# UMAP plot colored by cluster
+DimPlot(so, reduction = "umap", label = TRUE, pt.size = 0.5) +
+  ggtitle("UMAP - Clusters (Resolution 0.3)")
+```
+
+Resolution 0.3 was selected for downstream analysis, yielding 14 clusters. This resolution provides a balance between biological granularity and interpretability:
+
+-   **Major cell types are clearly separated** (large distinct clusters in different UMAP regions)
+-   **Rare cell populations are preserved** (small but distinct clusters 6, 10-13)
+-   **Avoids over-fragmentation** observed at higher resolutions (0.5: 19 clusters, 1.0: 23 clusters)
+-   **Matches expected cortical diversity**: Mouse cortex contains \~10-15 distinct cell types/states, including multiple neuronal subtypes, glial cells, and vascular cells
+
+The UMAP visualization shows clear spatial segregation between major clusters, suggesting distinct transcriptional profiles consistent with different cell type identities.
+
+## 6.6. Cell Type Annotation final
+
+**Marker Gene Identification**
+
+First, we identify the top marker genes for each cluster to understand the molecular characteristics of each cell population.
 
 ```{r}
 # Find markers for all clusters
@@ -1676,6 +1783,7 @@ top_markers <- all_markers %>%
 
 print(top_markers)
 ```
+The marker genes table shows which genes are specific to each cluster. These genes help us understand what cell type each cluster might represent.
 
 ```{r}
 # Get top 2 markers per cluster for visualization
@@ -1690,51 +1798,77 @@ DotPlot(so, features = top2_markers) +
   RotatedAxis() +
   ggtitle("Top Marker Genes per Cluster")
 ```
+The dot plot visualizes the top marker genes for each cluster. Each row represents a cluster (0-13), and each column represents a gene. The size of each dot shows what percentage of cells in that cluster express the gene (larger dot = more cells expressing it). The color intensity indicates the average expression level (darker blue = higher expression). This allows us to quickly identify which genes are specifically expressed in which clusters, helping us determine the identity of each cell type.
 
-Based on marker gene expression, annotate clusters by assigning cell type labels.
 
 ```{r}
-# Check current cluster IDs
-cat("Current cluster IDs:\n")
-print(levels(Idents(so)))
+# Load appropriate reference dataset (MouseRNAseqData for mouse cortex)
+ref <- celldex::MouseRNAseqData()
 
-# Assign cell type labels (adjust based on marker expression)
-cluster_annotations <- c(
-  "0" = "Excitatory Neurons",
-  "1" = "Inhibitory Neurons", 
-  "2" = "Oligodendrocytes",
-  "3" = "Astrocytes",
-  "4" = "Microglia",
-  "5" = "OPCs",
-  "6" = "Endothelial"
-)
+# Convert Seurat to SingleCellExperiment
+sce <- as.SingleCellExperiment(so)
 
-# Only annotate clusters that exist in your data
-existing_clusters <- as.character(unique(Idents(so)))
-cluster_annotations <- cluster_annotations[names(cluster_annotations) %in% existing_clusters]
+# Run SingleR automatic annotation
+predictions <- SingleR(test = sce, 
+                       ref = ref, 
+                       labels = ref$label.main)
 
-# Add cell type annotations to metadata
-so$cell_type <- as.character(Idents(so))
-for(cluster_id in names(cluster_annotations)) {
-  so$cell_type[so$cell_type == cluster_id] <- cluster_annotations[cluster_id]
-}
+# Add predictions to Seurat object
+so$cell_type_auto <- predictions$labels
 
 # View annotation summary
-cat("\nCell type annotations:\n")
-print(table(so$cell_type))
+cat("Automatic cell type annotations:\n")
+print(table(so$cell_type_auto))
 ```
 
 ```{r}
-# UMAP with cell type annotations
-DimPlot(so, reduction = "umap", group.by = "cell_type", label = TRUE, pt.size = 0.5) +
-  ggtitle("UMAP - Annotated Cell Types (Human Cortex)")
+# Visualize automatic annotations
+DimPlot(so, reduction = "umap", group.by = "cell_type_auto", label = TRUE, pt.size = 0.5) +
+  ggtitle("UMAP - Automatic Cell Type Annotation (SingleR)")
 ```
+The UMAP visualization reveals the cellular composition of the mouse cortex dataset. The large blue region dominating the center and bottom of the plot represents neurons, which constitute the vast majority of cells - this is expected for brain cortex tissue. 
+At the top of the UMAP (around coordinates 0-5 on the y-axis), we observe small but distinct clusters of non-neuronal cell types including oligodendrocytes, astrocytes, microglia, endothelial cells, and immune cells (B cells, T cells, NK cells). These supporting cell types are spatially separated from the main neuronal population, indicating that SingleR successfully identified distinct transcriptional signatures for each cell type. 
 
-### 6.7. Results and Summary
+
+**Simplified Cell Type Categories**
+
+To improve interpretability, we group similar cell types into broader categories.
 
 ```{r}
-# Calculate cell type proportions
-cell_type_counts <- table(so$cell_type)
+# Group similar cell types together
+so$cell_type_simplified <- so$cell_type_auto
+
+# Combine similar categories
+so$cell_type_simplified <- gsub("Macrophages|Microglia", "Myeloid cells", so$cell_type_simplified)
+so$cell_type_simplified <- gsub("B cells|T cells|NK cells", "Immune cells", so$cell_type_simplified)
+so$cell_type_simplified <- gsub("Endothelial cells", "Endothelial", so$cell_type_simplified)
+so$cell_type_simplified <- gsub("Epithelial cells", "Epithelial", so$cell_type_simplified)
+
+# View simplified annotations
+cat("\nSimplified cell type annotations:\n")
+print(table(so$cell_type_simplified))
+```
+
+```{r}
+# Plot simplified version
+DimPlot(so, reduction = "umap", group.by = "cell_type_simplified", 
+        label = TRUE, repel = TRUE, pt.size = 0.5) +
+  ggtitle("UMAP - Simplified Cell Types")
+```
+The simplified categories make it easier to interpret the data. The large purple area shows neurons, which make up most of the cells in the cortex. 
+The smaller groups at the top represent supporting cells like oligodendrocytes (which help neurons transmit signals), astrocytes (which provide nutrients), and other cell types including immune and blood vessel cells. 
+This distribution is exactly what we expect for brain cortex tissue.
+
+
+
+**Cell Type Proportions**
+
+Finally, we quantify the proportion of each cell type in our dataset. This gives us an overview of the cellular composition of the tissue.
+
+
+```{r}
+# Calculate cell type proportions using detailed annotation
+cell_type_counts <- table(so$cell_type_auto)
 cell_type_props <- prop.table(cell_type_counts) * 100
 
 # Create proportion dataframe
@@ -1743,30 +1877,24 @@ prop_df <- data.frame(
   Proportion = as.numeric(cell_type_props)
 )
 
-# Plot cell type proportions
+# Plot cell type proportions with percentage labels
 ggplot(prop_df, aes(x = reorder(CellType, -Proportion), y = Proportion, fill = CellType)) +
   geom_bar(stat = "identity") +
+  geom_text(aes(label = paste0(round(Proportion, 2), "%")), 
+            vjust = -0.5, size = 3) +  # Add percentage labels
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1),
         legend.position = "none") +
-  labs(title = "Cell Type Proportions in Human Cortex",
+  labs(title = "Cell Type Proportions in Mouse Cortex",
        x = "Cell Type",
-       y = "Percentage of Cells")
+       y = "Percentage of Cells") +
+  ylim(0, max(prop_df$Proportion) * 1.1)  # Add space at top for labels
 ```
 
-```{r}
-# Save the processed Seurat object
-saveRDS(so, file = "human_cortex_scRNA_processed.rds")
-cat("Seurat object saved to 'human_cortex_scRNA_processed.rds'\n")
-```
+This bar plot quantifies what we saw in the UMAP visualizations. Neurons make up over 96% of all cells, which is typical for cortex tissue. The remaining cells include oligodendrocytes (1.56%), astrocytes (1.33%), and microglia (0.46%) - all important supporting cells. 
 
-This single-cell RNA-seq analysis of human cortex tissue has:
+Other cell types like endothelial cells, immune cells, and fibroblasts are present in very small proportions (less than 0.2% each)
 
-1.  **Quality Control**: Filtered cells based on gene counts and mitochondrial content
-2.  **Normalization**: Applied log-normalization to account for sequencing depth
-3.  **Feature Selection**: Identified 2,000 highly variable genes
-4.  **Dimensionality Reduction**: Performed PCA and UMAP for visualization
-5.  **Clustering**: Identified distinct cell populations using graph-based clustering
-6.  **Cell Type Annotation**: Assigned cell type labels based on known marker genes
 
-The identified cell types in the healthy human cortex can now be compared with bulk RNA-seq findings to understand cell-type-specific contributions to gene expression changes observed in glioblastoma.
+
+
