@@ -36,7 +36,7 @@ install_cran_if_missing(c(
   "tidyverse",
   "pheatmap",
   "Seurat",
-  "SeuratData"
+  "SeuratData",
   "visNetwork"
 ))
 
@@ -1271,6 +1271,36 @@ ggplot(deg_df, aes(x = degree)) +
 The degree distribution of the PPI network is highly right-skewed, indicating a scale-free topology characterized by a small number of highly connected hub proteins and many low-degree nodes, which is a typical feature of biological networks
 
 ```{r}
+
+library(poweRlaw)
+
+m <- displ$new(deg_df$degree)
+
+est_xmin <- estimate_xmin(m)
+m$setXmin(est_xmin)
+
+est_pars <- estimate_pars(m)
+m$setPars(est_pars$pars)
+```
+
+```{r}
+
+plot(
+  m,
+  main = "Degree distribution – Postsynaptic PPI",
+  xlab = "k",
+  ylab = "P(k)",
+  col = "black"
+)
+
+# power-law
+lines(m, col = "red", lwd = 2)
+
+```
+
+we can see that the Degree distribution follow the Power-law correctly.
+
+```{r}
 top_hubs <- sort(deg, decreasing = TRUE)[1:10]
 top_hubs
 
@@ -1366,16 +1396,15 @@ We initially selected the "hu-cortex-2017" dataset from the scRNAseq Bioconducto
 
 Despite this species mismatch with our human bulk RNA-seq analysis (GTEx and TCGA-GBM), we proceeded with the mouse scRNA-seq analysis for the following reasons:
 
-1. **Educational value**: This analysis demonstrates the complete single-cell RNA-seq workflow, including quality control, normalization, dimensionality reduction, clustering, and cell type annotation.
+1.  **Similar workflow**: This analysis demonstrates the complete single-cell RNA-seq workflow, including quality control, normalization, dimensionality reduction, clustering, and cell type annotation.
 
-2. **Cell type characterization**: Understanding the cellular composition of cortex tissue—even from mouse—provides important biological context. The major cell types in cortex (neurons, astrocytes, oligodendrocytes, microglia, endothelial cells) are conserved between mouse and human.
+2.  **Cell type characterization**: Understanding the cellular composition of cortex tissue—even from mouse—provides important biological context. The major cell types in cortex (neurons, astrocytes, oligodendrocytes, microglia, endothelial cells) are conserved between mouse and human.
 
-3. **Limited human alternatives**: After this discovery, we found that high-quality, publicly available human cortex scRNA-seq datasets are not available in the scRNAseq repository.
+3.  **Limited human alternatives**: After this discovery, we found that high-quality, publicly available human cortex scRNA-seq datasets are not available in the scRNAseq repository.
 
-4. **Methodological demonstration**: The computational methods and analytical pipeline demonstrated here are directly applicable to human single-cell data when available.
+4.  **Methodological demonstration**: The computational methods and analytical pipeline demonstrated here are directly applicable to human single-cell data when available.
 
 While ideally we would use human scRNA-seq data to match our bulk RNA-seq analysis, this cross-species approach still provides valuable insights into cortical cellular heterogeneity and demonstrates competency in single-cell data analysis techniques.
-
 
 ```{r}
 # Bioconductor packages
@@ -1425,13 +1454,12 @@ path = "cortex"
 cortex_sc <- fetchDataset(name,version,path)
 cortex_sc
 ```
-The dataset is loaded as a SingleCellExperiment object containing gene expression counts for individual cells.
 
+The dataset is loaded as a SingleCellExperiment object containing gene expression counts for individual cells.
 
 ## 6.2. Data Preparation and Quality Control
 
 Before analysis, we need to check the quality of our cells and remove low-quality ones. Poor quality cells can arise from dead or dying cells, doublets (two cells captured together), or technical artifacts.
-
 
 ```{r}
 # View available metadata columns
@@ -1465,7 +1493,6 @@ cat("\nNumber of genes:", nrow(cortex_sc), "\n")
 cat("Number of cells:", ncol(cortex_sc), "\n")
 ```
 
-
 **Objective:** The scRNA-seq dataset was downloaded as a SingleCellExperiment object. Before performing downstream single-cell analysis (normalization, dimensionality reduction, clustering), the data must be converted into a Seurat object, which requires:
 
 -   A standard sparse count matrix
@@ -1481,11 +1508,6 @@ assays(cortex_sc)
 
 # Access the raw counts matrix
 assay(cortex_sc, "counts")
-```
-
-```{r}
-colnames(colData(cortex_sc))
-
 ```
 
 ```{r}
@@ -1525,6 +1547,7 @@ so <- CreateSeuratObject(
 so
 
 ```
+
 The Seurat object is now created and ready for analysis. It stores the count matrix along with metadata for each cell.
 
 ```{r}
@@ -1549,6 +1572,7 @@ so[["percent.mt"]] <- PercentageFeatureSet(so, pattern = "^mt-")
 # View updated metadata
 head(so@meta.data)
 ```
+
 High mitochondrial gene percentage often indicates dying cells, as damaged cells leak cytoplasmic RNA while retaining mitochondrial RNA.
 
 ```{r}
@@ -1628,7 +1652,6 @@ plot2
 
 This plot shows how much each gene varies across cells compared to its average expression level. Genes shown in red are the most variable and were selected for further analysis, while genes in black show little variation and were not used. Many of the selected genes are known markers of different cell
 
-
 Scaling standardizes gene expression values by centering (subtracting the mean) and scaling (dividing by standard deviation). This ensures that highly expressed genes do not dominate downstream analyses.
 
 ```{r}
@@ -1661,8 +1684,6 @@ This plot shows the genes that contribute most to the first two principal compon
 
 Mal, Mag, and Mog contribute strongly to both PC1 and PC2, suggesting that differences related to these genes play an important role in separating cells in the PCA.
 
-
-
 ```{r}
 # PCA plot
 DimPlot(so, reduction = "pca")
@@ -1681,8 +1702,7 @@ DimHeatmap(so, dims = 1, cells = 500, balanced = TRUE)
 ElbowPlot(so, ndims = 30)
 ```
 
-
-The elbow plot shows the variance explained by each PC. We look for the "elbow" point where adding more PCs provides diminishing returns. 
+The elbow plot shows the variance explained by each PC. We look for the "elbow" point where adding more PCs provides diminishing returns.
 
 Based on the elbow plot, we select 15 PCs for downstream analysis (clustering and UMAP), as the variance explained drops substantially after this point
 
@@ -1704,6 +1724,7 @@ so <- FindClusters(so, resolution = c(0.1, 0.3, 0.5, 0.8, 1.0))
 # View clustering results in metadata
 head(so@meta.data)
 ```
+
 he resolution parameter controls how many clusters are identified. Lower resolution gives fewer, broader clusters; higher resolution gives more, finer clusters. We test multiple values to find the best balance:
 
 ```{r}
@@ -1737,8 +1758,8 @@ p3 <- DimPlot(so, reduction = "umap", group.by = "RNA_snn_res.0.5", label = TRUE
 
 p1 + p2 + p3
 ```
-Comparing different resolutions helps us choose the appropriate level of granularity. Lower resolutions merge similar cell types, while higher resolutions may split biological cell types into multiple clusters. 
-we think that 0.3 it's a good resolution
+
+Comparing different resolutions helps us choose the appropriate level of granularity. Lower resolutions merge similar cell types, while higher resolutions may split biological cell types into multiple clusters. we think that 0.3 it's a good resolution
 
 ```{r}
 # Set identity to resolution 0.3 
@@ -1783,6 +1804,7 @@ top_markers <- all_markers %>%
 
 print(top_markers)
 ```
+
 The marker genes table shows which genes are specific to each cluster. These genes help us understand what cell type each cluster might represent.
 
 ```{r}
@@ -1798,8 +1820,8 @@ DotPlot(so, features = top2_markers) +
   RotatedAxis() +
   ggtitle("Top Marker Genes per Cluster")
 ```
-The dot plot visualizes the top marker genes for each cluster. Each row represents a cluster (0-13), and each column represents a gene. The size of each dot shows what percentage of cells in that cluster express the gene (larger dot = more cells expressing it). The color intensity indicates the average expression level (darker blue = higher expression). This allows us to quickly identify which genes are specifically expressed in which clusters, helping us determine the identity of each cell type.
 
+The dot plot visualizes the top marker genes for each cluster. Each row represents a cluster (0-13), and each column represents a gene. The size of each dot shows what percentage of cells in that cluster express the gene (larger dot = more cells expressing it). The color intensity indicates the average expression level (darker blue = higher expression). This allows us to quickly identify which genes are specifically expressed in which clusters, helping us determine the identity of each cell type.
 
 ```{r}
 # Load appropriate reference dataset (MouseRNAseqData for mouse cortex)
@@ -1826,9 +1848,8 @@ print(table(so$cell_type_auto))
 DimPlot(so, reduction = "umap", group.by = "cell_type_auto", label = TRUE, pt.size = 0.5) +
   ggtitle("UMAP - Automatic Cell Type Annotation (SingleR)")
 ```
-The UMAP visualization reveals the cellular composition of the mouse cortex dataset. The large blue region dominating the center and bottom of the plot represents neurons, which constitute the vast majority of cells - this is expected for brain cortex tissue. 
-At the top of the UMAP (around coordinates 0-5 on the y-axis), we observe small but distinct clusters of non-neuronal cell types including oligodendrocytes, astrocytes, microglia, endothelial cells, and immune cells (B cells, T cells, NK cells). These supporting cell types are spatially separated from the main neuronal population, indicating that SingleR successfully identified distinct transcriptional signatures for each cell type. 
 
+The UMAP visualization reveals the cellular composition of the mouse cortex dataset. The large blue region dominating the center and bottom of the plot represents neurons, which constitute the vast majority of cells - this is expected for brain cortex tissue. At the top of the UMAP (around coordinates 0-5 on the y-axis), we observe small but distinct clusters of non-neuronal cell types including oligodendrocytes, astrocytes, microglia, endothelial cells, and immune cells (B cells, T cells, NK cells). These supporting cell types are spatially separated from the main neuronal population, indicating that SingleR successfully identified distinct transcriptional signatures for each cell type.
 
 **Simplified Cell Type Categories**
 
@@ -1855,16 +1876,12 @@ DimPlot(so, reduction = "umap", group.by = "cell_type_simplified",
         label = TRUE, repel = TRUE, pt.size = 0.5) +
   ggtitle("UMAP - Simplified Cell Types")
 ```
-The simplified categories make it easier to interpret the data. The large purple area shows neurons, which make up most of the cells in the cortex. 
-The smaller groups at the top represent supporting cells like oligodendrocytes (which help neurons transmit signals), astrocytes (which provide nutrients), and other cell types including immune and blood vessel cells. 
-This distribution is exactly what we expect for brain cortex tissue.
 
-
+The simplified categories make it easier to interpret the data. The large purple area shows neurons, which make up most of the cells in the cortex. The smaller groups at the top represent supporting cells like oligodendrocytes (which help neurons transmit signals), astrocytes (which provide nutrients), and other cell types including immune and blood vessel cells. This distribution is exactly what we expect for brain cortex tissue.
 
 **Cell Type Proportions**
 
 Finally, we quantify the proportion of each cell type in our dataset. This gives us an overview of the cellular composition of the tissue.
-
 
 ```{r}
 # Calculate cell type proportions using detailed annotation
@@ -1891,10 +1908,6 @@ ggplot(prop_df, aes(x = reorder(CellType, -Proportion), y = Proportion, fill = C
   ylim(0, max(prop_df$Proportion) * 1.1)  # Add space at top for labels
 ```
 
-This bar plot quantifies what we saw in the UMAP visualizations. Neurons make up over 96% of all cells, which is typical for cortex tissue. The remaining cells include oligodendrocytes (1.56%), astrocytes (1.33%), and microglia (0.46%) - all important supporting cells. 
+This bar plot quantifies what we saw in the UMAP visualizations. Neurons make up over 96% of all cells, which is typical for cortex tissue. The remaining cells include oligodendrocytes (1.56%), astrocytes (1.33%), and microglia (0.46%) - all important supporting cells.
 
 Other cell types like endothelial cells, immune cells, and fibroblasts are present in very small proportions (less than 0.2% each)
-
-
-
-
