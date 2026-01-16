@@ -1674,6 +1674,7 @@ print(so[["pca"]], dims = 1:5, nfeatures = 5)
 # Heatmap of top genes in first principal component
 DimHeatmap(so, dims = 1, cells = 500, balanced = TRUE)
 ```
+The heatmap shows gene expression patterns for the top genes driving PC1 variation. Cells clearly separate into two main groups: one group (left, magenta) shows high expression of neuronal genes (top rows), while the other group (right, yellow) shows high expression of myelin-related genes like Mobp, Mag, and Plp1 (bottom rows). This separation indicates that PC1 primarily captures the difference between neurons and oligodendrocytes, which are the two major cell populations in the cortex dataset. The clear color distinction confirms that these cell types have very different gene expression profiles.
 
 ```{r}
 # Elbow plot to determine optimal number of PCs
